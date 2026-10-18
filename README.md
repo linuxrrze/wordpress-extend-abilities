@@ -1,5 +1,7 @@
 # WordPress Extended Abilities
 
+[![CI](https://github.com/linuxrrze/wordpress-extend-abilities/actions/workflows/ci.yml/badge.svg)](https://github.com/linuxrrze/wordpress-extend-abilities/actions/workflows/ci.yml)
+
 Notes on the AI/MCP setup of **blog.linux-ng.de** and the design of a small plugin that adds
 **media upload from a local file** to the MCP toolset.
 
@@ -13,6 +15,15 @@ Notes on the AI/MCP setup of **blog.linux-ng.de** and the design of a small plug
   - [`docs/design-local-media-upload.md`](docs/design-local-media-upload.md): plugin design
   - [`extended-abilities/`](extended-abilities/README.md): the plugin (0.4.0: local uploads via upload slots, chunked and inline; GPS removal; replacing media files; media metadata; scheduling, pages, revisions; exposing other plugins' abilities)
   - [`client/`](client/README.md): `exab-upload`, a local MCP server for clients without a shell
+  - [`CHANGELOG.md`](CHANGELOG.md), [`LICENSE`](LICENSE) (GPL-2.0)
+  - [`bin/build_zip.py`](bin/build_zip.py): builds the installable plugin zip (and checks that
+    the version numbers agree)
+  - [`.github/workflows/ci.yml`](.github/workflows/ci.yml): builds the zip and runs the
+    end-to-end tests against it on every push. A `vX.Y.Z` tag creates a GitHub release.
+
+Releasing: bump the version in `extended-abilities/extended-abilities.php` (header and
+`EXAB_VERSION`) and in `client/exab_upload.py`, add a `CHANGELOG.md` section, commit, then
+`git tag vX.Y.Z && git push --tags`.
   - [`images/`](images/): diagram for the blog article (SVG source + PNG)
 
 State as of 2026-10-18, read from the live site through the MCP connection:

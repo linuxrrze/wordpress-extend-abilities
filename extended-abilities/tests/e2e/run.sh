@@ -6,10 +6,12 @@
 # Usage: tests/e2e/run.sh [--fixture path/to/image.png] [-k name-filter]
 # Env:   PLAYGROUND  command to start the Playground CLI (default: pinned npx version)
 #        PORT        port for the test site (default 9400)
+#        PLUGIN_DIR  plugin directory to test (default: the source next to tests/)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN="$(cd "$HERE/../.." && pwd)"
+# PLUGIN_DIR: test another copy of the plugin, e.g. the unpacked release zip (CI does this).
+PLUGIN="$(cd "${PLUGIN_DIR:-$HERE/../..}" && pwd)"
 PORT="${PORT:-9400}"
 PLAYGROUND="${PLAYGROUND:-npx -y @wp-playground/cli@3.1.56}"
 OUT="$(mktemp -d)"

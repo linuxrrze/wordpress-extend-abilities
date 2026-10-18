@@ -1,0 +1,79 @@
+# Builds the plugin zip and runs the end-to-end tests against exactly that zip, in a throwaway
+# WordPress (Playground: PHP as WebAssembly with SQLite, MCP Adapter installed by the blueprint).
+# A pushed tag "vX.Y.Z" additionally creates a GitHub release with the zip, after the tests pass.
+#
+# Actions are pinned to commit SHAs (the comment names the version).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and end-to-end tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Check versions and build the plugin zip
+        run: python3 -I bin/build_zip.py
+
+      - name: Check that the upload helper compiles
+        run: python3 -I -m py_compile client/exab_upload.py
+
+      - name: End-to-end tests against the packaged plugin
+        run: |
+          unzip -q dist/extended-abilities-*.zip -d dist/unpacked
+          PLUGIN_DIR=dist/unpacked/extended-abilities \
+            extended-abilities/tests/e2e/run.sh --fixture images/wordpress-mcp-architecture.png
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: extended-abilities
+          path: dist/extended-abilities-*.zip
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: extended-abilities
+          path: dist
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          python3 -I bin/build_zip.py --release-notes --expect-version "$version" > notes.md
+          gh release create "$TAG" "dist/extended-abilities-$version.zip" \
+            --verify-tag --title "Extended Abilities $version" --notes-file notes.md

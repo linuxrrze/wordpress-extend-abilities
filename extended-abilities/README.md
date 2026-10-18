@@ -167,12 +167,16 @@ with SQLite). They need only Node.js and Python 3, with no PHP, MySQL or Docker:
 tests/e2e/run.sh                         # generated test image
 tests/e2e/run.sh --fixture some.png      # real image for the happy path
 tests/e2e/run.sh -k mcp                  # filter by test name
+PLUGIN_DIR=/path/to/unpacked/zip/extended-abilities tests/e2e/run.sh   # test another copy
 ```
+
+CI (`.github/workflows/ci.yml`) builds the release zip with `bin/build_zip.py`, unpacks it, and
+runs the suite against **that** copy, so a file missing from the package fails the build.
 
 The blueprint installs MCP Adapter v0.7.1, creates users (admin, two authors, a subscriber)
 with application passwords, test posts, pages and revisions, sets the site time zone to
 Europe/Berlin, generates JPEG and WebP fixtures with GD, limits chunks to 100 KB, and enables
-`WP_DEBUG_LOG`. Any PHP notice, warning or error in that log fails the run. There are 73 tests:
+`WP_DEBUG_LOG`. Any PHP notice, warning or error in that log fails the run. There are 74 tests:
 
 - **Uploads (21):** the happy path with metadata and featured image, POST instead of PUT,
   single use, wrong token, wrong content type, size, checksum and content mismatches, schema
@@ -209,12 +213,17 @@ Europe/Berlin, generates JPEG and WebP fixtures with GD, limits chunks to 100 KB
     symlink, `..`, hidden, `~/.ssh`, wrong type, fake content, relative path).
   - Both security checks were mutation-tested: with the symlink resolution or the per-post
     permission check removed, the tests fail.
+- **Uninstall (1, runs last):** WordPress' real `uninstall_plugin()` removes all options, open
+  slots, partial chunk files and the cron event, while the uploaded media stays.
 
 `tests/` is not needed on a production site. Leave it out when deploying.
 
 ## Deploying
 
-Copy the `extended-abilities` directory (without `tests/`) to `wp-content/plugins/` and
-activate it. The eleven `exab/*` abilities then appear in `mcp-adapter-discover-abilities`, and
+Download `extended-abilities-<version>.zip` from the
+[GitHub releases](https://github.com/linuxrrze/wordpress-extend-abilities/releases), or build
+it with `python3 -I bin/build_zip.py`, then install it in **Plugins → Add New → Upload
+Plugin** and activate it. Alternatively, copy the `extended-abilities` directory (without
+`tests/`) to `wp-content/plugins/`. The eleven `exab/*` abilities then appear in `mcp-adapter-discover-abilities`, and
 in EWPA's ability list under Settings → WP Abilities. Check the upload options under
 Settings → Extended Abilities.

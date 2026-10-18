@@ -111,6 +111,45 @@ add_action(
 			)
 		);
 
+		// What the plugin leaves in the database and file system (for the uninstall test).
+		register_rest_route(
+			'exab-e2e/v1',
+			'/state',
+			array(
+				'methods'             => 'GET',
+				'permission_callback' => $admin_only,
+				'callback'            => function () {
+					global $wpdb;
+					$options = array();
+					foreach ( array( 'exab_expose_abilities', 'exab_allow_pdf', 'exab_strip_gps' ) as $name ) {
+						$options[ $name ] = null !== $wpdb->get_var( $wpdb->prepare( "SELECT option_id FROM {$wpdb->options} WHERE option_name = %s", $name ) );
+					}
+					return array(
+						'options'      => $options,
+						'slots'        => (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name LIKE %s", 'exab\\_slot\\_%' ) ),
+						'chunk_dir'    => is_dir( \Exab\Upload_Slots::chunk_dir() ),
+						'cron_next'    => (int) wp_next_scheduled( 'exab_cleanup_slots' ),
+						'attachments'  => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type = 'attachment'" ),
+					);
+				},
+			)
+		);
+
+		// Runs WordPress' real uninstall routine for the plugin (deleting it in wp-admin does the same).
+		register_rest_route(
+			'exab-e2e/v1',
+			'/uninstall',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => $admin_only,
+				'callback'            => function () {
+					require_once ABSPATH . 'wp-admin/includes/plugin.php';
+					uninstall_plugin( 'extended-abilities/extended-abilities.php' );
+					return array( 'uninstalled' => true );
+				},
+			)
+		);
+
 		// Lets the tests expire a slot without waiting for the TTL.
 		register_rest_route(
 			'exab-e2e/v1',

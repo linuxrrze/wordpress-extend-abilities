@@ -1397,6 +1397,36 @@ def test_helper_reports_wrong_credentials_and_missing_config():
     assert result.returncode != 0 and "missing environment variables" in result.stderr, result
 
 
+# --- uninstall (must stay the LAST test: it deletes the plugin's data) ----------
+
+
+def test_zz_uninstall_removes_plugin_data_but_keeps_media():
+    def state():
+        status, body, _ = http("GET", "/wp-json/exab-e2e/v1/state", user="admin")
+        assert status == 200, body
+        return body
+
+    # Leave something of everything behind: options, an open slot with a partial chunk file.
+    set_option("exab_allow_pdf", "1")
+    set_option("exab_strip_gps", "0")
+    http("POST", "/wp-json/exab-e2e/v1/expose", {"names": ["exab-e2e/hidden-echo"]}, user="admin")
+    slot = create_slot(FIXTURE, filename="left-behind.png")
+    assert put_chunk(slot, FIXTURE[:100000], 0)[0] == 202
+
+    before = state()
+    assert all(before["options"].values()), before
+    assert before["slots"] > 0 and before["chunk_dir"] and before["cron_next"] > 0, before
+    assert any(f.startswith(slot["slot_id"]) for f in chunk_files())
+
+    status, body, _ = http("POST", "/wp-json/exab-e2e/v1/uninstall", user="admin")
+    assert status == 200, body
+
+    after = state()
+    assert not any(after["options"].values()), after
+    assert after["slots"] == 0 and not after["chunk_dir"] and after["cron_next"] == 0, after
+    assert after["attachments"] == before["attachments"], "uploaded media must survive an uninstall"
+
+
 # --- runner ------------------------------------------------------------------
 
 
