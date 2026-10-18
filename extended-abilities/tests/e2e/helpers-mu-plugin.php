@@ -5,16 +5,66 @@
  * @package Exab
  */
 
+// Two "third-party" abilities that are NOT MCP-public, for the expose setting.
+add_action(
+	'wp_abilities_api_categories_init',
+	function () {
+		wp_register_ability_category(
+			'exab-e2e',
+			array(
+				'label'       => 'E2E',
+				'description' => 'Test abilities.',
+			)
+		);
+	}
+);
+add_action(
+	'wp_abilities_api_init',
+	function () {
+		wp_register_ability(
+			'exab-e2e/hidden-echo',
+			array(
+				'label'               => 'Hidden Echo',
+				'description'         => 'Returns its input. Not MCP-public by itself.',
+				'category'            => 'exab-e2e',
+				'input_schema'        => array(
+					'type'       => 'object',
+					'properties' => array( 'text' => array( 'type' => 'string' ) ),
+				),
+				'permission_callback' => fn() => current_user_can( 'read' ),
+				'execute_callback'    => fn( $input ) => array( 'echo' => $input['text'] ?? '' ),
+				'meta'                => array(
+					'show_in_rest' => true,
+					'annotations'  => array( 'readonly' => true ),
+				),
+			)
+		);
+		wp_register_ability(
+			'exab-e2e/hidden-wipe',
+			array(
+				'label'               => 'Hidden Wipe',
+				'description'         => 'Pretends to delete things. Admins only.',
+				'category'            => 'exab-e2e',
+				'permission_callback' => fn() => current_user_can( 'manage_options' ),
+				'execute_callback'    => fn() => array( 'wiped' => false ),
+				'meta'                => array( 'annotations' => array( 'destructive' => true ) ),
+			)
+		);
+	}
+);
+
 add_action(
 	'rest_api_init',
 	function () {
+		$admin_only = fn() => current_user_can( 'manage_options' );
+
 		// Lets the tests expire a slot without waiting for the TTL.
 		register_rest_route(
 			'exab-e2e/v1',
 			'/expire/(?P<slot_id>[a-f0-9]{32})',
 			array(
 				'methods'             => 'POST',
-				'permission_callback' => fn() => current_user_can( 'manage_options' ),
+				'permission_callback' => $admin_only,
 				'callback'            => function ( WP_REST_Request $request ) {
 					$slot = \Exab\Slot_Store::get( $request['slot_id'] );
 					if ( ! $slot ) {
@@ -22,6 +72,37 @@ add_action(
 					}
 					\Exab\Slot_Store::transition( $request['slot_id'], $slot, array( 'expires_at' => time() - 1 ) );
 					return array( 'expired' => true );
+				},
+			)
+		);
+
+		// Sets the expose option the way options.php would (through the registered sanitizer).
+		register_rest_route(
+			'exab-e2e/v1',
+			'/expose',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => $admin_only,
+				'callback'            => function ( WP_REST_Request $request ) {
+					update_option( \Exab\Expose_Abilities::OPTION, \Exab\Expose_Abilities::sanitize( $request['names'] ) );
+					return array( 'exposed' => \Exab\Expose_Abilities::exposed() );
+				},
+			)
+		);
+
+		// Renders the settings page so notices in the template show up in the debug log.
+		register_rest_route(
+			'exab-e2e/v1',
+			'/render-settings',
+			array(
+				'methods'             => 'GET',
+				'permission_callback' => $admin_only,
+				'callback'            => function () {
+					require_once ABSPATH . 'wp-admin/includes/plugin.php';
+					require_once ABSPATH . 'wp-admin/includes/template.php';
+					ob_start();
+					\Exab\Expose_Abilities::render_page();
+					return array( 'html' => ob_get_clean() );
 				},
 			)
 		);

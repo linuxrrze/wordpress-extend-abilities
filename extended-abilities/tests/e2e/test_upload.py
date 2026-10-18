@@ -106,6 +106,13 @@ def status_of(slot, user="author"):
     return run_ability("exab/get-upload-status", {"slot_id": slot["slot_id"]}, user, readonly=True)
 
 
+def expect_forbidden(result):
+    """A denied permission check: HTTP 403 with the Abilities API's code, not a crash that happens to be 403."""
+    status, body, _ = result
+    code = body.get("code") if isinstance(body, dict) else None
+    assert status == 403 and code == "rest_ability_cannot_execute", f"expected permission denial, got {status} {body}"
+
+
 def expect_error(result, code, http_status=None):
     status, body, _ = result
     assert isinstance(body, dict) and body.get("code") == code, f"expected {code}, got {status} {body}"
@@ -241,14 +248,12 @@ def test_too_large_is_rejected():
 
 
 def test_subscriber_cannot_create_slot():
-    status, body, _ = run_ability("exab/create-upload-slot", slot_params(make_png(8, 8)), "subscriber")
-    assert status == 403, f"{status} {body}"
+    expect_forbidden(run_ability("exab/create-upload-slot", slot_params(make_png(8, 8)), "subscriber"))
 
 
 def test_author_cannot_attach_to_foreign_post():
     params = slot_params(make_png(8, 8), post_id=CREDS["posts"]["by_admin"], set_featured=True)
-    status, body, _ = run_ability("exab/create-upload-slot", params, "author")
-    assert status == 403, f"{status} {body}"
+    expect_forbidden(run_ability("exab/create-upload-slot", params, "author"))
 
 
 def test_featured_requires_post():
@@ -298,48 +303,333 @@ def test_parallel_uploads_only_one_wins():
     assert all(code in (201, 409) for code in results), results
 
 
-def test_full_flow_through_mcp_adapter():
-    endpoint = "/wp-json/mcp/mcp-adapter-default-server"
-    base_headers = {"Accept": "application/json, text/event-stream"}
+class McpClient:
+    """Minimal MCP client for the adapter's default server (streamable HTTP, JSON responses)."""
 
-    def rpc(method, params, msg_id, session=None):
-        headers = dict(base_headers)
-        if session:
-            headers["Mcp-Session-Id"] = session
-            headers["MCP-Protocol-Version"] = "2025-06-18"
-        payload = {"jsonrpc": "2.0", "method": method, "params": params}
-        if msg_id is not None:
-            payload["id"] = msg_id
-        return http("POST", endpoint, payload, headers, user="author")
+    ENDPOINT = "/wp-json/mcp/mcp-adapter-default-server"
+    VERSION = "2025-06-18"
 
-    status, body, headers = rpc(
-        "initialize",
-        {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "exab-e2e", "version": "1"}},
-        1,
-    )
-    assert status == 200, f"initialize: {status} {body}"
-    session = headers.get("Mcp-Session-Id")
-    rpc("notifications/initialized", {}, None, session)
-
-    def call(ability, params, msg_id):
-        status, body, _ = rpc(
-            "tools/call",
-            {"name": "mcp-adapter-execute-ability", "arguments": {"ability_name": ability, "parameters": params}},
-            msg_id,
-            session,
+    def __init__(self, user):
+        self.user = user
+        self.session = None
+        self.next_id = 1
+        status, body, headers = self._rpc(
+            "initialize",
+            {"protocolVersion": self.VERSION, "capabilities": {}, "clientInfo": {"name": "exab-e2e", "version": "1"}},
         )
-        assert status == 200 and "result" in body, f"tools/call {ability}: {status} {body}"
+        assert status == 200, f"initialize: {status} {body}"
+        self.session = headers.get("Mcp-Session-Id")
+        self._rpc("notifications/initialized", {}, notification=True)
+
+    def _rpc(self, method, params, notification=False):
+        headers = {"Accept": "application/json, text/event-stream"}
+        if self.session:
+            headers["Mcp-Session-Id"] = self.session
+            headers["MCP-Protocol-Version"] = self.VERSION
+        payload = {"jsonrpc": "2.0", "method": method, "params": params}
+        if not notification:
+            payload["id"] = self.next_id
+            self.next_id += 1
+        return http("POST", self.ENDPOINT, payload, headers, user=self.user)
+
+    def tool(self, name, arguments):
+        """Calls an MCP tool; returns (is_error, decoded payload)."""
+        status, body, _ = self._rpc("tools/call", {"name": name, "arguments": arguments})
+        assert status == 200 and "result" in body, f"tools/call {name}: {status} {body}"
         result = body["result"]
-        assert not result.get("isError"), f"{ability} failed: {result}"
-        data = result.get("structuredContent") or json.loads(result["content"][0]["text"])
+        data = result.get("structuredContent")
+        if data is None:
+            text = result["content"][0]["text"]
+            try:
+                data = json.loads(text)
+            except ValueError:
+                data = text
+        return bool(result.get("isError")), data
+
+    def execute(self, ability, params):
+        is_error, data = self.tool(
+            "mcp-adapter-execute-ability", {"ability_name": ability, "parameters": params}
+        )
+        assert not is_error, f"{ability} failed: {data}"
         return data.get("data", data) if isinstance(data, dict) and "success" in data else data
 
+    def ability_names(self):
+        is_error, data = self.tool("mcp-adapter-discover-abilities", {})
+        assert not is_error, data
+        abilities = data.get("abilities", data.get("data", {}).get("abilities", [])) if isinstance(data, dict) else []
+        return {a["name"] for a in abilities}
+
+
+def test_full_flow_through_mcp_adapter():
+    mcp = McpClient("author")
     data = make_png(32, 32, seed=11)
-    slot = call("exab/create-upload-slot", slot_params(data, filename="via-mcp.png", alt_text="via MCP"), 2)
+    slot = mcp.execute("exab/create-upload-slot", slot_params(data, filename="via-mcp.png", alt_text="via MCP"))
     status, uploaded, _ = put(slot, data)
     assert status == 201, f"{status} {uploaded}"
-    st = call("exab/get-upload-status", {"slot_id": slot["slot_id"]}, 3)
+    st = mcp.execute("exab/get-upload-status", {"slot_id": slot["slot_id"]})
     assert st["status"] == "completed" and st["attachment_id"] == uploaded["attachment_id"], st
+
+
+# --- milestone 2: media ------------------------------------------------------
+
+STATE = {}
+
+
+def upload(data, user="author", **extra):
+    """Uploads through a slot and returns the attachment ID."""
+    slot = create_slot(data, user=user, **extra)
+    status, body, _ = put(slot, data)
+    assert status == 201, f"upload: {status} {body}"
+    return body["attachment_id"]
+
+
+def big_attachment():
+    """The real fixture, uploaded once (it has sub-sizes)."""
+    if "big" not in STATE:
+        STATE["big"] = upload(FIXTURE, filename="m2-big.png", alt_text="Big alt", caption="Big caption")
+    return STATE["big"]
+
+
+def test_m2_abilities_are_registered_and_public():
+    names = McpClient("author").ability_names()
+    for name in (
+        "exab/get-media-item", "exab/update-media", "exab/set-featured-image",
+        "exab/schedule-post", "exab/update-page", "exab/list-revisions", "exab/restore-revision",
+    ):
+        assert name in names, f"{name} missing from discover-abilities"
+
+
+def test_get_media_item_with_sizes_and_block_markup():
+    attachment_id = big_attachment()
+    status, item, _ = run_ability("exab/get-media-item", {"attachment_id": attachment_id, "size": "medium"}, "author", readonly=True)
+    assert status == 200, f"{status} {item}"
+    assert item["attachment_id"] == attachment_id and item["mime_type"] == "image/png"
+    assert item["alt_text"] == "Big alt" and item["caption"] == "Big caption"
+    assert "full" in item["sizes"] and item["width"] == item["sizes"]["full"]["width"]
+    if item["width"] > 300:
+        assert "medium" in item["sizes"], item["sizes"].keys()
+    markup = item["block_markup"]
+    assert markup.startswith("<!-- wp:image {") and markup.rstrip().endswith("<!-- /wp:image -->")
+    assert f'"id":{attachment_id}' in markup and f"wp-image-{attachment_id}" in markup
+    assert 'alt="Big alt"' in markup and "Big caption" in markup
+    assert item["sizes"].get("medium", item["sizes"]["full"])["url"] in markup
+
+
+def test_get_media_item_unknown_size_falls_back_to_full():
+    attachment_id = big_attachment()
+    status, item, _ = run_ability("exab/get-media-item", {"attachment_id": attachment_id, "size": "nope"}, "author", readonly=True)
+    assert status == 200 and "size-full" in item["block_markup"], item
+
+
+def test_get_media_item_not_found():
+    expect_error(
+        run_ability("exab/get-media-item", {"attachment_id": 999999}, "author", readonly=True),
+        "exab_attachment_not_found",
+    )
+
+
+def test_update_media_changes_only_given_fields():
+    attachment_id = upload(make_png(16, 16, seed=20), alt_text="old alt", title="Old title", caption="old caption",
+                           post_id=CREDS["posts"]["by_author"])
+    status, item, _ = run_ability(
+        "exab/update-media", {"attachment_id": attachment_id, "title": "New title", "alt_text": "new alt"}, "author"
+    )
+    assert status == 200, f"{status} {item}"
+    assert item["title"] == "New title" and item["alt_text"] == "new alt", item
+    assert item["caption"] == "old caption" and item["post_id"] == CREDS["posts"]["by_author"], item
+
+    # Empty string clears, post_id 0 detaches.
+    status, item, _ = run_ability(
+        "exab/update-media", {"attachment_id": attachment_id, "alt_text": "", "caption": "", "post_id": 0}, "author"
+    )
+    assert status == 200, item
+    assert item["alt_text"] == "" and item["caption"] == "" and item["post_id"] is None, item
+
+    status, media, _ = http("GET", f"/wp-json/wp/v2/media/{attachment_id}?context=edit", user="author")
+    assert media["alt_text"] == "" and media["post"] is None and media["title"]["raw"] == "New title", media
+
+
+def test_update_media_forbidden_for_other_author():
+    attachment_id = upload(make_png(16, 16, seed=21))
+    expect_forbidden(run_ability("exab/update-media", {"attachment_id": attachment_id, "title": "x"}, "author2"))
+
+
+def test_set_and_remove_featured_image():
+    post_id = CREDS["posts"]["to_schedule"]
+    attachment_id = upload(make_png(16, 16, seed=22))
+    status, body, _ = run_ability("exab/set-featured-image", {"post_id": post_id, "attachment_id": attachment_id}, "author")
+    assert status == 200 and body["featured_image_id"] == attachment_id, f"{status} {body}"
+    # Setting the same image again is fine (idempotent).
+    status, body, _ = run_ability("exab/set-featured-image", {"post_id": post_id, "attachment_id": attachment_id}, "author")
+    assert status == 200, f"{status} {body}"
+    assert http("GET", f"/wp-json/wp/v2/posts/{post_id}?context=edit", user="author")[1]["featured_media"] == attachment_id
+
+    status, body, _ = run_ability("exab/set-featured-image", {"post_id": post_id, "attachment_id": 0}, "author")
+    assert status == 200 and body["featured_image_id"] is None, body
+    assert http("GET", f"/wp-json/wp/v2/posts/{post_id}?context=edit", user="author")[1]["featured_media"] == 0
+
+
+def test_set_featured_image_forbidden_on_foreign_post():
+    attachment_id = upload(make_png(16, 16, seed=23))
+    expect_forbidden(run_ability(
+        "exab/set-featured-image", {"post_id": CREDS["posts"]["by_admin"], "attachment_id": attachment_id}, "author"
+    ))
+
+
+# --- milestone 2: content ----------------------------------------------------
+
+
+def test_schedule_post_with_offset():
+    post_id = CREDS["posts"]["to_schedule"]
+    status, body, _ = run_ability("exab/schedule-post", {"post_id": post_id, "date": "2030-01-15T10:00:00+02:00"}, "author")
+    assert status == 200, f"{status} {body}"
+    assert body["status"] == "future"
+    assert body["date_gmt"] == "2030-01-15T08:00:00+00:00", body
+    # Site time zone is Europe/Berlin (UTC+1 in January).
+    assert body["date_local"] == "2030-01-15T09:00:00+01:00", body
+    post = http("GET", f"/wp-json/wp/v2/posts/{post_id}?context=edit", user="author")[1]
+    assert post["status"] == "future" and post["date_gmt"] == "2030-01-15T08:00:00"
+
+
+def test_schedule_post_naive_date_uses_site_timezone_and_reschedules():
+    post_id = CREDS["posts"]["to_schedule"]  # already scheduled by the previous test
+    status, body, _ = run_ability("exab/schedule-post", {"post_id": post_id, "date": "2030-07-01 12:30"}, "author")
+    assert status == 200, f"{status} {body}"
+    # Europe/Berlin is UTC+2 in July.
+    assert body["date_local"] == "2030-07-01T12:30:00+02:00" and body["date_gmt"] == "2030-07-01T10:30:00+00:00", body
+
+
+def test_schedule_post_rejects_past_and_published_and_garbage():
+    expect_error(
+        run_ability("exab/schedule-post", {"post_id": CREDS["posts"]["to_schedule"], "date": "2001-01-01 00:00"}, "author"),
+        "exab_date_in_past",
+    )
+    expect_error(
+        run_ability("exab/schedule-post", {"post_id": CREDS["posts"]["published_by_author"], "date": "2030-01-01 00:00"}, "author"),
+        "exab_not_schedulable",
+    )
+    expect_error(
+        run_ability("exab/schedule-post", {"post_id": CREDS["posts"]["to_schedule"], "date": "next tuesday-ish!"}, "author"),
+        "exab_invalid_date",
+    )
+
+
+def test_schedule_post_forbidden():
+    expect_forbidden(run_ability("exab/schedule-post", {"post_id": CREDS["posts"]["by_admin"], "date": "2030-01-01 00:00"}, "author"))
+    expect_forbidden(run_ability("exab/schedule-post", {"post_id": CREDS["posts"]["to_schedule"], "date": "2030-01-01 00:00"}, "subscriber"))
+
+
+def test_update_page():
+    page_id = CREDS["posts"]["child_page"]
+    params = {
+        "page_id": page_id,
+        "title": "Updated child",
+        "content": "<!-- wp:paragraph --><p>Hello</p><!-- /wp:paragraph -->",
+        "slug": "updated-child",
+        "menu_order": 3,
+        "status": "publish",
+        "parent_id": 0,
+    }
+    status, body, _ = run_ability("exab/update-page", params, "admin")
+    assert status == 200, f"{status} {body}"
+    assert body["status"] == "publish" and body["slug"] == "updated-child" and body["parent_id"] == 0
+    page = http("GET", f"/wp-json/wp/v2/pages/{page_id}?context=edit", user="admin")[1]
+    assert page["title"]["raw"] == "Updated child" and page["menu_order"] == 3
+    assert "<p>Hello</p>" in page["content"]["raw"]
+
+    # Back under the parent, nothing else changes.
+    status, body, _ = run_ability("exab/update-page", {"page_id": page_id, "parent_id": CREDS["posts"]["parent_page"]}, "admin")
+    assert status == 200 and body["parent_id"] == CREDS["posts"]["parent_page"], body
+    assert body["slug"] == "updated-child"
+
+
+def test_update_page_prevents_parent_loop():
+    expect_error(
+        run_ability("exab/update-page", {"page_id": CREDS["posts"]["parent_page"], "parent_id": CREDS["posts"]["child_page"]}, "admin"),
+        "exab_parent_loop",
+    )
+    expect_error(
+        run_ability("exab/update-page", {"page_id": CREDS["posts"]["parent_page"], "parent_id": CREDS["posts"]["parent_page"]}, "admin"),
+        "exab_parent_loop",
+    )
+
+
+def test_update_page_rejects_posts_and_authors():
+    expect_error(
+        run_ability("exab/update-page", {"page_id": CREDS["posts"]["by_author"], "title": "x"}, "admin"),
+        "exab_page_not_found",
+    )
+    expect_forbidden(run_ability("exab/update-page", {"page_id": CREDS["posts"]["parent_page"], "title": "x"}, "author"))
+
+
+def test_list_and_restore_revisions():
+    post_id = CREDS["posts"]["with_revisions"]
+    status, body, _ = run_ability("exab/list-revisions", {"post_id": post_id}, "author", readonly=True)
+    assert status == 200, f"{status} {body}"
+    revisions = body["revisions"]
+    titles = [r["title"] for r in revisions]
+    assert titles[:3] == ["Revisions v4", "Revisions v3", "Revisions v2"], titles
+    assert not any(r["is_autosave"] for r in revisions)
+
+    v2 = next(r for r in revisions if r["title"] == "Revisions v2")
+    status, body, _ = run_ability("exab/restore-revision", {"revision_id": v2["revision_id"]}, "author")
+    assert status == 200 and body["post_id"] == post_id, f"{status} {body}"
+    post = http("GET", f"/wp-json/wp/v2/posts/{post_id}?context=edit", user="author")[1]
+    assert post["title"]["raw"] == "Revisions v2" and "content version 2" in post["content"]["raw"], post["title"]
+
+    # The restore is itself undoable: it added a new revision, and v4 is still there.
+    status, body, _ = run_ability("exab/list-revisions", {"post_id": post_id, "limit": 100}, "author", readonly=True)
+    titles = [r["title"] for r in body["revisions"]]
+    assert titles[0] == "Revisions v2" and "Revisions v4" in titles, titles
+
+
+def test_revisions_forbidden_for_other_author():
+    post_id = CREDS["posts"]["with_revisions"]
+    expect_forbidden(run_ability("exab/list-revisions", {"post_id": post_id}, "author2", readonly=True))
+    revision_id = run_ability("exab/list-revisions", {"post_id": post_id}, "author", readonly=True)[1]["revisions"][0]["revision_id"]
+    expect_forbidden(run_ability("exab/restore-revision", {"revision_id": revision_id}, "author2"))
+
+
+# --- milestone 2: expose other plugins' abilities ----------------------------
+
+
+def test_expose_setting_makes_hidden_ability_visible_to_mcp():
+    hidden = "exab-e2e/hidden-echo"
+    assert hidden not in McpClient("author").ability_names(), "test ability must start hidden"
+
+    status, body, _ = http("POST", "/wp-json/exab-e2e/v1/expose", {"names": [hidden, "Not A Valid Name!"]}, user="admin")
+    assert status == 200 and body["exposed"] == [hidden], body
+
+    mcp = McpClient("author")
+    assert hidden in mcp.ability_names()
+    assert mcp.execute(hidden, {"text": "hi"}) == {"echo": "hi"}
+
+    # Exposing does not bypass permissions: an author still cannot run an admin-only ability.
+    http("POST", "/wp-json/exab-e2e/v1/expose", {"names": [hidden, "exab-e2e/hidden-wipe"]}, user="admin")
+    is_error, data = McpClient("author").tool(
+        "mcp-adapter-execute-ability", {"ability_name": "exab-e2e/hidden-wipe", "parameters": {}}
+    )
+    assert is_error, f"author must not run hidden-wipe: {data}"
+
+    http("POST", "/wp-json/exab-e2e/v1/expose", {"names": []}, user="admin")
+    assert hidden not in McpClient("author").ability_names()
+
+
+def test_settings_page_renders():
+    http("POST", "/wp-json/exab-e2e/v1/expose", {"names": ["exab-e2e/hidden-wipe"]}, user="admin")
+    status, body, _ = http("GET", "/wp-json/exab-e2e/v1/render-settings", user="admin")
+    http("POST", "/wp-json/exab-e2e/v1/expose", {"names": []}, user="admin")
+    assert status == 200, body
+    html = body["html"]
+    assert "exab-e2e/hidden-echo" in html and "exab-e2e/hidden-wipe" in html
+    assert "destructive" in html and "read-only" in html
+    assert 'name="exab_expose_abilities[]"' in html
+    assert html.index("hidden-echo") < html.index("hidden-wipe"), "read-only abilities come first"
+    # Abilities that are public on their own are not listed.
+    assert "exab/create-upload-slot" not in html
+    # The exposed one is checked.
+    wipe_input = html[html.index('value="exab-e2e/hidden-wipe"'):][:200]
+    assert "checked" in wipe_input
 
 
 # --- runner ------------------------------------------------------------------

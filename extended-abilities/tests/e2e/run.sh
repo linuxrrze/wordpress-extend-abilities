@@ -40,9 +40,9 @@ done
 status=0
 python3 -I "$HERE/test_upload.py" --base "http://127.0.0.1:$PORT" --creds "$OUT/creds.json" "$@" || status=$?
 
-# PHP notices and warnings fail the run too.
-if [[ -s "$OUT/debug.log" ]]; then
-	echo; echo "PHP debug log is not empty:"; cat "$OUT/debug.log"
+# PHP notices, warnings and errors fail the run too (other log lines, e.g. from cron, don't).
+if [[ -s "$OUT/debug.log" ]] && grep -q "PHP " "$OUT/debug.log"; then
+	echo; echo "PHP debug log has messages:"; grep "PHP " "$OUT/debug.log"
 	status=1
 fi
 exit "$status"

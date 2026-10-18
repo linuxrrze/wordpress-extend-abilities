@@ -14,8 +14,9 @@ defined( 'ABSPATH' ) || exit;
  */
 final class Plugin {
 
-	const CATEGORY     = 'exab-media';
-	const CLEANUP_HOOK = 'exab_cleanup_slots';
+	const CATEGORY         = 'exab-media';
+	const CONTENT_CATEGORY = 'exab-content';
+	const CLEANUP_HOOK     = 'exab_cleanup_slots';
 
 	/**
 	 * Registers all hooks.
@@ -28,12 +29,35 @@ final class Plugin {
 
 		add_action( 'wp_abilities_api_categories_init', array( __CLASS__, 'register_category' ) );
 		add_action( 'wp_abilities_api_init', array( Upload_Slots::class, 'register_abilities' ) );
+		add_action( 'wp_abilities_api_init', array( Media_Abilities::class, 'register_abilities' ) );
+		add_action( 'wp_abilities_api_init', array( Content_Abilities::class, 'register_abilities' ) );
 		add_action( 'rest_api_init', array( Upload_Slots::class, 'register_rest_routes' ) );
 		add_action( self::CLEANUP_HOOK, array( Slot_Store::class, 'delete_stale' ) );
+		Expose_Abilities::init();
 	}
 
 	/**
-	 * Registers the ability category used by all media abilities.
+	 * Meta shared by all exab abilities: REST + MCP visible, with the given annotations.
+	 *
+	 * @param bool $readonly    Does not modify anything.
+	 * @param bool $destructive May delete or overwrite data irrecoverably.
+	 * @param bool $idempotent  Repeating the call with the same input has no further effect.
+	 * @return array
+	 */
+	public static function ability_meta( bool $readonly, bool $destructive, bool $idempotent ): array {
+		return array(
+			'show_in_rest' => true,
+			'mcp'          => array( 'public' => true ),
+			'annotations'  => array(
+				'readonly'    => $readonly,
+				'destructive' => $destructive,
+				'idempotent'  => $idempotent,
+			),
+		);
+	}
+
+	/**
+	 * Registers the ability categories.
 	 */
 	public static function register_category(): void {
 		wp_register_ability_category(
@@ -41,6 +65,13 @@ final class Plugin {
 			array(
 				'label'       => __( 'Media (Extended Abilities)', 'extended-abilities' ),
 				'description' => __( 'Upload and manage media library items.', 'extended-abilities' ),
+			)
+		);
+		wp_register_ability_category(
+			self::CONTENT_CATEGORY,
+			array(
+				'label'       => __( 'Content (Extended Abilities)', 'extended-abilities' ),
+				'description' => __( 'Schedule posts, update pages and work with revisions.', 'extended-abilities' ),
 			)
 		);
 	}

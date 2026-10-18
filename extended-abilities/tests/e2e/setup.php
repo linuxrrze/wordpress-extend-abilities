@@ -43,7 +43,61 @@ $creds['posts'] = array(
 			'post_status' => 'publish',
 		)
 	),
+	'to_schedule' => wp_insert_post(
+		array(
+			'post_title'  => 'Draft to schedule',
+			'post_author' => $users['author'],
+			'post_status' => 'draft',
+		)
+	),
+	'published_by_author' => wp_insert_post(
+		array(
+			'post_title'  => 'Already published',
+			'post_author' => $users['author'],
+			'post_status' => 'publish',
+		)
+	),
+	'parent_page' => wp_insert_post(
+		array(
+			'post_title'  => 'Parent page',
+			'post_type'   => 'page',
+			'post_status' => 'publish',
+		)
+	),
 );
+$creds['posts']['child_page'] = wp_insert_post(
+	array(
+		'post_title'  => 'Child page',
+		'post_type'   => 'page',
+		'post_status' => 'draft',
+		'post_parent' => $creds['posts']['parent_page'],
+	)
+);
+
+// A post with revisions. WordPress saves a revision on each update (not on insert),
+// so v1 → v2 → v3 → v4 yields revisions v2, v3, v4.
+wp_set_current_user( $users['author'] );
+$creds['posts']['with_revisions'] = wp_insert_post(
+	array(
+		'post_title'   => 'Revisions v1',
+		'post_content' => 'content version 1',
+		'post_author'  => $users['author'],
+		'post_status'  => 'draft',
+	)
+);
+foreach ( array( 2, 3, 4 ) as $version ) {
+	wp_update_post(
+		array(
+			'ID'           => $creds['posts']['with_revisions'],
+			'post_title'   => "Revisions v$version",
+			'post_content' => "content version $version",
+		)
+	);
+}
+wp_set_current_user( 0 );
+
+// Makes "site time zone" tests meaningful (UTC would hide offset bugs).
+update_option( 'timezone_string', 'Europe/Berlin' );
 $creds['max_upload_bytes'] = wp_max_upload_size();
 
 file_put_contents( '/e2e-out/creds.json', wp_json_encode( $creds, JSON_PRETTY_PRINT ) );

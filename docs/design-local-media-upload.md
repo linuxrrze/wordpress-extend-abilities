@@ -1,6 +1,6 @@
-# Design: *Extended Abilities*, local media upload over MCP
+# Design: *Extended Abilities* (local media upload over MCP and more)
 
-Status: **milestone 1 implemented** (see [`../extended-abilities/`](../extended-abilities/README.md)), M2–M4 open · Target: WordPress ≥ 6.9 (tested against 7.1.3), MCP Adapter ≥ 0.7
+Status: **milestones 1 and 2 implemented** (see [`../extended-abilities/`](../extended-abilities/README.md)), M3–M4 open · Target: WordPress ≥ 6.9 (tested against 7.1.3), MCP Adapter ≥ 0.7
 
 ## 1. Goal
 
@@ -259,7 +259,10 @@ extended-abilities/
    Tested end to end in WordPress Playground (21 tests, including the full flow through MCP
    Adapter 0.7.1) instead of wp-env, because the dev machine has no Docker or PHP. Still open: a
    run against a staging copy of the real site (nginx/Apache body limits, real MySQL).
-2. **M2:** `update-media`, `get-media-item`, `set-featured-image`, settings page.
+2. **M2 (done, 0.2.0; scope extended 2026-10-18, see §10):** media metadata (`update-media`,
+   `get-media-item`, `set-featured-image`), the content gaps found on the live site
+   (`schedule-post`, `update-page`, `list-revisions`, `restore-revision`), and a settings page
+   that exposes other plugins' abilities to MCP.
 3. **M3:** `upload-media-inline`, optional PDF profile, GPS stripping, chunked uploads for
    large files.
 4. **M4 (optional):** `exab-upload` stdio helper for shell-less clients; `replace-media-file`.
@@ -274,3 +277,105 @@ extended-abilities/
   it doesn't matter.
 - Should the plugin stay private (Git deploy) or go to wordpress.org? That affects the slug,
   i18n and the review requirements.
+
+## 10. Milestone 2: filling the gaps
+
+### 10.1 Why the scope grew
+
+An inventory of the live site (2026-10-18, WordPress 7.1.3, 79 abilities over REST) found two
+kinds of gaps.
+
+**Abilities that exist but MCP can't see**, because they lack `meta.mcp.public`:
+
+- **Visualizer** registers `visualizer/list-charts`, `get-chart`, `upsert-chart`,
+  `set-data-source` and `refresh-chart-data`. They are reachable over REST, but hidden from MCP.
+- The **AI plugin** registers its abilities only while the matching experiment is switched on
+  (none are on the blog). Even then only `ai/alt-text-generation` and
+  `ai/image-prompt-generation` are MCP-public. `core/content-query`, `core/settings-get` and
+  `core/users-query` (experiment "Custom Abilities") are REST-only.
+
+**Tasks with no ability at all** (EWPA 2.13.7 + core):
+
+| Gap | Today's workaround |
+|---|---|
+| Edit alt text, caption or title of a media item | `ewpa/update-post-meta` for alt text only |
+| Get one media item with all sizes | `ewpa/get-media` (list) |
+| Set or remove a featured image independently | `ewpa/update-post` (posts only) |
+| Schedule an existing draft | none: `ewpa/update-post` has no `future` status and no date |
+| Update a page | none: only `create-page` / `get-page`; whether `update-post` works on pages is unverified |
+| List or restore revisions | none |
+
+Not planned: abilities for users, plugins, themes or core updates. An agent with those rights
+could take over the site, so that gap is deliberate.
+
+### 10.2 New abilities
+
+All abilities are MCP-public and `show_in_rest`. Each one checks normal WordPress
+capabilities on the specific object. Category `exab-media` for media, new category
+`exab-content` for posts, pages and revisions.
+
+| Ability | Input (required in **bold**) | Capability | Annotations |
+|---|---|---|---|
+| `exab/get-media-item` | **attachment_id**, size (default `large`) | `read_post` on the attachment | read-only |
+| `exab/update-media` | **attachment_id**, title, alt_text, caption, description, post_id (0 = detach) | `edit_post` on the attachment; `edit_post` on the new parent | idempotent |
+| `exab/set-featured-image` | **post_id**, **attachment_id** (0 = remove) | `edit_post` on the post; attachment must be an image | idempotent |
+| `exab/schedule-post` | **post_id**, **date** (ISO 8601; without an offset it is site-local time) | `edit_post` + `publish_posts` of the post type | idempotent |
+| `exab/update-page` | **page_id**, title, content, excerpt, slug, status, parent_id, menu_order | `edit_post`; `publish_pages` to publish | idempotent |
+| `exab/list-revisions` | **post_id**, limit (default 20) | `edit_post` on the parent | read-only |
+| `exab/restore-revision` | **revision_id** | `edit_post` on the parent | not destructive (the current state becomes a new revision) |
+
+Details:
+
+- `get-media-item` returns id, title, alt_text, caption, description, mime_type, url, width,
+  height, filesize, parent post, every registered size `{url, width, height}`, and ready-to-paste
+  `block_markup` (a `wp:image` block for the requested size, falling back to full).
+- `update-media` only changes the fields it is given. An empty string clears a field.
+- `schedule-post` rejects dates in the past (WordPress would publish immediately instead). It
+  returns the local and GMT dates. To unschedule, set the status back to draft with
+  `ewpa/update-post`.
+- `update-page` only accepts post type `page`. `parent_id` must be another existing page and
+  must not create a cycle.
+- `list-revisions` returns id, date (GMT), author, title, `is_autosave` and content length.
+  It doesn't return the full content, to keep responses small.
+- `restore-revision` uses `wp_restore_post_revision()`, which saves the current state as a new
+  revision first, so a restore can itself be undone.
+
+### 10.3 Exposing other plugins' abilities
+
+New page **Settings → Extended Abilities**, visible to `manage_options` only:
+
+- It lists every registered ability **not** already MCP-public, with its name, label, plugin
+  namespace and annotations (read-only or destructive). Each one has a checkbox.
+- The stored option `exab_expose_abilities` is a list of names. A `wp_register_ability_args`
+  filter sets `meta.mcp.public = true` for those names while they are registered.
+- Exposing an ability **doesn't bypass anything**. Its own `permission_callback` still runs
+  for the calling user.
+- Destructive abilities are highlighted, and read-only abilities are listed first.
+
+Example for the blog: expose `visualizer/list-charts`, `visualizer/get-chart` and
+`visualizer/upsert-chart`.
+
+### 10.4 Code layout additions
+
+```
+src/class-media-abilities.php     get-media-item, update-media, set-featured-image
+src/class-content-abilities.php   schedule-post, update-page, list-revisions, restore-revision
+src/class-expose-abilities.php    settings page + wp_register_ability_args filter
+```
+
+### 10.5 Implementation notes
+
+- Schemas for the M2 abilities live next to their callbacks (`class-media-abilities.php`,
+  `class-content-abilities.php`), not in `class-schemas.php`.
+- WordPress doesn't save the first version of a post as a revision, only later updates. So
+  `list-revisions` can't return the original state of a post that was never updated.
+- `wp_get_post_revision()` takes its argument by reference. Passing an expression throws, and
+  the tests caught that.
+- The settings page writes `exab_expose_abilities` through `options.php`. Uninstall deletes it.
+
+### 10.6 Tests
+
+The existing Playground suite is extended. Each ability gets a test for the normal case and
+one for capability checks (author vs. admin vs. subscriber). The exposure setting is tested
+by registering a hidden test ability, exposing it, and checking that it shows up through
+`mcp-adapter-discover-abilities`. The settings page is rendered once to catch PHP notices.

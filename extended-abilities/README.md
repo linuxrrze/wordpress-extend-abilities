@@ -6,7 +6,11 @@ shell. Built on the core Abilities API (WP ≥ 6.9) and exposed through the
 [MCP Adapter](https://github.com/WordPress/mcp-adapter). Design and background:
 [`../docs/design-local-media-upload.md`](../docs/design-local-media-upload.md).
 
-Status: **0.1.0, milestone 1**. Images only (JPEG, PNG, GIF, WebP, AVIF).
+Status: **0.2.0, milestones 1 and 2**. Uploads are images only (JPEG, PNG, GIF, WebP, AVIF).
+
+Besides uploads, the plugin fills gaps that the standard plugins leave (see design doc §10):
+editing media metadata, scheduling existing drafts, updating pages, restoring revisions, and
+exposing other plugins' hidden abilities to MCP.
 
 ## How it works
 
@@ -28,6 +32,16 @@ Step 2 is plain HTTP. The token is the only credential it needs.
 |---|---|---|
 | `exab/create-upload-slot` | write, not destructive | `upload_files`, plus `edit_post` on `post_id` if given |
 | `exab/get-upload-status` | read-only, idempotent | `upload_files`, own slots only |
+| `exab/get-media-item` | read-only | `read_post` on the attachment |
+| `exab/update-media` | idempotent | `edit_post` on the attachment (and on the new parent post) |
+| `exab/set-featured-image` | idempotent | `edit_post` on the post |
+| `exab/schedule-post` | idempotent | `edit_post` + `publish_posts` of the post type |
+| `exab/update-page` | idempotent | `edit_post`; `publish_pages` to publish or make private |
+| `exab/list-revisions` | read-only | `edit_post` on the post |
+| `exab/restore-revision` | idempotent | `edit_post` on the post (the current state becomes a new revision first) |
+
+`get-media-item` also returns ready-to-paste `wp:image` block markup for a chosen size.
+`schedule-post` takes ISO 8601 dates; a date without a UTC offset is in the site time zone.
 
 REST route (not an ability, because it takes raw bytes):
 `PUT|POST /wp-json/exab/v1/upload/{slot_id}` with header `X-Exab-Upload-Token`.
@@ -49,6 +63,15 @@ REST route (not an ability, because it takes raw bytes):
 
 Note that media files are publicly reachable by URL. Keep your MCP client's confirmation
 prompts on for uploads, so a prompt-injected agent can't quietly publish local files.
+
+## Exposing other plugins' abilities
+
+**Settings → Extended Abilities** lists every registered ability that is not MCP-public
+(read-only first, destructive ones highlighted). Checked abilities get `meta.mcp.public = true`
+through the `wp_register_ability_args` filter and then show up in
+`mcp-adapter-discover-abilities`. Their own permission checks still apply: exposing an
+admin-only ability does not let an author run it. Example for the blog: Visualizer's
+`visualizer/list-charts`, `get-chart` and `upsert-chart`.
 
 ## Filters
 
@@ -84,11 +107,20 @@ tests/e2e/run.sh -k mcp                  # filter by test name
 ```
 
 The blueprint installs MCP Adapter v0.7.1, creates users (admin, two authors, a subscriber)
-with application passwords, and enables `WP_DEBUG_LOG`. A non-empty PHP debug log fails the
-run. There are 21 tests: the happy path with metadata and featured image, POST instead of PUT,
-single use, wrong token, wrong content type, size, checksum and content mismatches, schema and
-capability checks, foreign slots, expiry, the open-slot limit, parallel uploads, and the full
-flow through the MCP Adapter's JSON-RPC endpoint.
+with application passwords, test posts, pages and revisions, sets the site time zone to
+Europe/Berlin, and enables `WP_DEBUG_LOG`. Any PHP notice, warning or error in that log fails
+the run. There are 40 tests:
+
+- **Uploads (21):** the happy path with metadata and featured image, POST instead of PUT,
+  single use, wrong token, wrong content type, size, checksum and content mismatches, schema
+  and capability checks, foreign slots, expiry, the open-slot limit, parallel uploads, and the
+  full flow through the MCP Adapter's JSON-RPC endpoint.
+- **Milestone 2 (19):** media item with sizes and block markup, partial metadata updates,
+  featured image set and remove, scheduling with and without a UTC offset (including daylight
+  saving), rejection of past dates and published posts, page updates with parent-loop
+  protection, listing and restoring revisions, and the expose setting through MCP (including
+  that exposing doesn't bypass permissions). Every "forbidden" test checks for the Abilities
+  API's permission error code, so a crash that happens to return 403 can't pass as a denial.
 
 `tests/` is not needed on a production site. Leave it out when deploying.
 

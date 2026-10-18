@@ -53,15 +53,7 @@ final class Upload_Slots {
 				'output_schema'       => Schemas::create_slot_output(),
 				'permission_callback' => array( __CLASS__, 'can_create' ),
 				'execute_callback'    => array( __CLASS__, 'create' ),
-				'meta'                => array(
-					'show_in_rest' => true,
-					'mcp'          => array( 'public' => true ),
-					'annotations'  => array(
-						'readonly'    => false,
-						'destructive' => false,
-						'idempotent'  => false,
-					),
-				),
+				'meta'                => Plugin::ability_meta( false, false, false ),
 			)
 		);
 
@@ -75,15 +67,7 @@ final class Upload_Slots {
 				'output_schema'       => Schemas::status_output(),
 				'permission_callback' => array( __CLASS__, 'can_read_status' ),
 				'execute_callback'    => array( __CLASS__, 'status' ),
-				'meta'                => array(
-					'show_in_rest' => true,
-					'mcp'          => array( 'public' => true ),
-					'annotations'  => array(
-						'readonly'    => true,
-						'destructive' => false,
-						'idempotent'  => true,
-					),
-				),
+				'meta'                => Plugin::ability_meta( true, false, true ),
 			)
 		);
 	}
