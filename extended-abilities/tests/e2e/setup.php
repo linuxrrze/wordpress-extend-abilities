@@ -100,4 +100,24 @@ wp_set_current_user( 0 );
 update_option( 'timezone_string', 'Europe/Berlin' );
 $creds['max_upload_bytes'] = wp_max_upload_size();
 
+// Real images from GD; the tests add EXIF/XMP GPS data to them.
+$fixtures = '/e2e-out/fixtures';
+wp_mkdir_p( $fixtures );
+$draw = function ( int $w, int $h ) {
+	$img = imagecreatetruecolor( $w, $h );
+	for ( $x = 0; $x < $w; $x += 8 ) {
+		imagefilledrectangle( $img, $x, 0, $x + 7, $h - 1, imagecolorallocate( $img, ( $x * 3 ) % 256, ( $x * 7 ) % 256, 128 ) );
+	}
+	return $img;
+};
+imagejpeg( $draw( 640, 480 ), "$fixtures/plain.jpg", 85 );
+imagejpeg( $draw( 160, 120 ), "$fixtures/small.jpg", 80 );
+imagewebp( $draw( 96, 64 ), "$fixtures/plain.webp", 80 );
+$creds['fixtures'] = array(
+	'jpeg'       => 'plain.jpg',
+	'small_jpeg' => 'small.jpg',
+	'webp'       => 'plain.webp',
+	'webp_size'  => array( 96, 64 ),
+);
+
 file_put_contents( '/e2e-out/creds.json', wp_json_encode( $creds, JSON_PRETTY_PRINT ) );

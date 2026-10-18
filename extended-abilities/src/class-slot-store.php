@@ -22,6 +22,7 @@ final class Slot_Store {
 	const PREFIX = 'exab_slot_';
 
 	const STATUS_PENDING   = 'pending';
+	const STATUS_RECEIVING = 'receiving';
 	const STATUS_UPLOADING = 'uploading';
 	const STATUS_COMPLETED = 'completed';
 	const STATUS_FAILED    = 'failed';
@@ -115,20 +116,21 @@ final class Slot_Store {
 	}
 
 	/**
-	 * Returns the effective status, turning stale pending slots into `expired`.
+	 * Returns the effective status, turning stale pending or receiving slots into `expired`.
 	 *
 	 * @param array $slot Slot data.
 	 * @return string One of the STATUS_* constants.
 	 */
 	public static function effective_status( array $slot ): string {
-		if ( self::STATUS_PENDING === $slot['status'] && time() > (int) $slot['expires_at'] ) {
+		$open = array( self::STATUS_PENDING, self::STATUS_RECEIVING );
+		if ( in_array( $slot['status'], $open, true ) && time() > (int) $slot['expires_at'] ) {
 			return self::STATUS_EXPIRED;
 		}
 		return $slot['status'];
 	}
 
 	/**
-	 * Counts a user's pending, not yet expired slots.
+	 * Counts a user's open (pending or receiving), not yet expired slots.
 	 *
 	 * @param int $user_id User ID.
 	 * @return int Number of open slots.
@@ -136,7 +138,8 @@ final class Slot_Store {
 	public static function count_open( int $user_id ): int {
 		$open = 0;
 		foreach ( self::all() as $slot ) {
-			if ( (int) $slot['user_id'] === $user_id && self::STATUS_PENDING === self::effective_status( $slot ) ) {
+			$status = self::effective_status( $slot );
+			if ( (int) $slot['user_id'] === $user_id && ( self::STATUS_PENDING === $status || self::STATUS_RECEIVING === $status ) ) {
 				++$open;
 			}
 		}
@@ -144,7 +147,8 @@ final class Slot_Store {
 	}
 
 	/**
-	 * Deletes slots that expired more than RETENTION seconds ago. Runs hourly via cron.
+	 * Deletes slots that expired more than RETENTION seconds ago, and partial uploads of
+	 * expired slots. Runs hourly via cron.
 	 */
 	public static function delete_stale(): void {
 		global $wpdb;
@@ -154,6 +158,10 @@ final class Slot_Store {
 			if ( (int) $slot['expires_at'] < $cutoff ) {
 				// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 				$wpdb->delete( $wpdb->options, array( 'option_name' => $name ), array( '%s' ) );
+			}
+			// Abandoned chunked uploads: remove their partial file once the slot has expired.
+			if ( (int) $slot['expires_at'] < time() && self::STATUS_COMPLETED !== $slot['status'] ) {
+				Upload_Slots::delete_chunk_file( substr( $name, strlen( self::PREFIX ) ) );
 			}
 		}
 	}

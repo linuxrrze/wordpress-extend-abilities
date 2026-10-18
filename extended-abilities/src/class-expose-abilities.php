@@ -150,11 +150,13 @@ final class Expose_Abilities {
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'Extended Abilities', 'extended-abilities' ); ?></h1>
-			<p>
-				<?php esc_html_e( 'Abilities registered by other plugins that the MCP Adapter does not show, because they are not marked as MCP-public. Checked abilities become visible to MCP clients. Each ability still checks the calling user\'s permissions.', 'extended-abilities' ); ?>
-			</p>
 			<form method="post" action="options.php">
 				<?php settings_fields( self::GROUP ); ?>
+				<?php Settings::render_fields(); ?>
+				<h2><?php esc_html_e( 'Expose abilities to MCP', 'extended-abilities' ); ?></h2>
+				<p>
+					<?php esc_html_e( 'Abilities registered by other plugins that the MCP Adapter does not show, because they are not marked as MCP-public. Checked abilities become visible to MCP clients. Each ability still checks the calling user\'s permissions.', 'extended-abilities' ); ?>
+				</p>
 				<?php if ( ! $candidates ) : ?>
 					<p><em><?php esc_html_e( 'Every registered ability is already MCP-public.', 'extended-abilities' ); ?></em></p>
 				<?php else : ?>

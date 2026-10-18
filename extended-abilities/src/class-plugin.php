@@ -34,6 +34,7 @@ final class Plugin {
 		add_action( 'rest_api_init', array( Upload_Slots::class, 'register_rest_routes' ) );
 		add_action( self::CLEANUP_HOOK, array( Slot_Store::class, 'delete_stale' ) );
 		Expose_Abilities::init();
+		Settings::init();
 	}
 
 	/**

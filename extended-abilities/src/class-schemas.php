@@ -31,8 +31,8 @@ final class Schemas {
 				),
 				'mime_type'    => array(
 					'type'        => 'string',
-					'enum'        => Upload_Slots::default_mime_types(),
-					'description' => 'MIME type of the file. Images only in this version.',
+					'enum'        => Importer::configured_mime_types(),
+					'description' => 'MIME type of the file: an image type, or application/pdf if PDF uploads are enabled.',
 				),
 				'size_bytes'   => array(
 					'type'        => 'integer',
@@ -94,9 +94,14 @@ final class Schemas {
 				),
 				'expires_at'   => array( 'type' => 'string' ),
 				'max_bytes'    => array( 'type' => 'integer' ),
+				'max_chunk_bytes' => array( 'type' => 'integer' ),
 				'curl'         => array(
 					'type'        => 'string',
 					'description' => 'Ready-to-run command. Replace FILE with the local path.',
+				),
+				'curl_chunked' => array(
+					'type'        => 'string',
+					'description' => 'Bash one-liner for chunked upload. Replace FILE with the local path; set OFFSET=<received_bytes> to resume.',
 				),
 			),
 		);
@@ -135,6 +140,7 @@ final class Schemas {
 					'type' => 'string',
 					'enum' => array(
 						Slot_Store::STATUS_PENDING,
+						Slot_Store::STATUS_RECEIVING,
 						Slot_Store::STATUS_UPLOADING,
 						Slot_Store::STATUS_COMPLETED,
 						Slot_Store::STATUS_FAILED,
@@ -142,11 +148,53 @@ final class Schemas {
 					),
 				),
 				'filename'        => array( 'type' => 'string' ),
+				'size_bytes'      => array( 'type' => 'integer' ),
+				'received_bytes'  => array( 'type' => 'integer' ),
 				'expires_at'      => array( 'type' => 'string' ),
 				'attachment_id'   => $nullable_int,
 				'url'             => $nullable_string,
 				'set_as_featured' => array( 'type' => 'boolean' ),
+				'gps_removed'     => array( 'type' => 'boolean' ),
 				'error'           => $nullable_string,
+			),
+		);
+	}
+
+	/**
+	 * Input of exab/upload-media-inline: the slot input without size/checksum, plus the data.
+	 *
+	 * @param int $max_bytes Largest accepted file.
+	 * @return array
+	 */
+	public static function inline_input( int $max_bytes ): array {
+		$schema = self::create_slot_input();
+		unset( $schema['properties']['size_bytes'], $schema['properties']['sha256'] );
+
+		$schema['required']                  = array( 'filename', 'mime_type', 'data_base64' );
+		$schema['properties']['data_base64'] = array(
+			'type'        => 'string',
+			'minLength'   => 4,
+			// Base64 grows by 4/3; leave room for a data: URI prefix and line breaks.
+			'maxLength'   => (int) ( ceil( $max_bytes / 3 ) * 4 * 1.05 ) + 100,
+			'description' => sprintf( 'File content as base64 (max. %d bytes decoded). A data: URI prefix is accepted.', $max_bytes ),
+		);
+		return $schema;
+	}
+
+	/**
+	 * Output of exab/upload-media-inline.
+	 *
+	 * @return array
+	 */
+	public static function inline_output(): array {
+		return array(
+			'type'       => 'object',
+			'required'   => array( 'attachment_id', 'url' ),
+			'properties' => array(
+				'attachment_id'   => array( 'type' => 'integer' ),
+				'url'             => array( 'type' => 'string' ),
+				'set_as_featured' => array( 'type' => 'boolean' ),
+				'gps_removed'     => array( 'type' => 'boolean' ),
 			),
 		);
 	}

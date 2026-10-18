@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name:       Extended Abilities
- * Description:       Additional MCP-ready abilities for the WordPress Abilities API. Upload local files to the media library through single-use upload slots, manage media metadata, schedule posts, update pages, restore revisions, and expose other plugins' abilities to MCP.
- * Version:           0.2.0
+ * Description:       Additional MCP-ready abilities for the WordPress Abilities API. Upload local files to the media library through upload slots (chunked and resumable) or inline, strip GPS data, manage media metadata, schedule posts, update pages, restore revisions, and expose other plugins' abilities to MCP.
+ * Version:           0.3.0
  * Requires at least: 6.9
  * Requires PHP:      8.1
  * Author:            Marcel Ritter
@@ -15,11 +15,14 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'EXAB_VERSION', '0.2.0' );
+define( 'EXAB_VERSION', '0.3.0' );
 define( 'EXAB_PLUGIN_FILE', __FILE__ );
 
 require_once __DIR__ . '/src/class-slot-store.php';
 require_once __DIR__ . '/src/class-schemas.php';
+require_once __DIR__ . '/src/class-settings.php';
+require_once __DIR__ . '/src/class-gps-scrubber.php';
+require_once __DIR__ . '/src/class-importer.php';
 require_once __DIR__ . '/src/class-upload-slots.php';
 require_once __DIR__ . '/src/class-media-abilities.php';
 require_once __DIR__ . '/src/class-content-abilities.php';

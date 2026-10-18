@@ -1,6 +1,6 @@
 # Design: *Extended Abilities* (local media upload over MCP and more)
 
-Status: **milestones 1 and 2 implemented** (see [`../extended-abilities/`](../extended-abilities/README.md)), M3–M4 open · Target: WordPress ≥ 6.9 (tested against 7.1.3), MCP Adapter ≥ 0.7
+Status: **milestones 1–3 implemented** (0.3.0, see [`../extended-abilities/`](../extended-abilities/README.md)), M4 open · Target: WordPress ≥ 6.9 (tested against 7.1.3), MCP Adapter ≥ 0.7
 
 ## 1. Goal
 
@@ -263,8 +263,8 @@ extended-abilities/
    `get-media-item`, `set-featured-image`), the content gaps found on the live site
    (`schedule-post`, `update-page`, `list-revisions`, `restore-revision`), and a settings page
    that exposes other plugins' abilities to MCP.
-3. **M3:** `upload-media-inline`, optional PDF profile, GPS stripping, chunked uploads for
-   large files.
+3. **M3 (done, 0.3.0, see §11):** `upload-media-inline`, optional PDF uploads, GPS
+   removal, chunked (resumable) uploads for large files.
 4. **M4 (optional):** `exab-upload` stdio helper for shell-less clients; `replace-media-file`.
 
 ## 9. Open questions
@@ -379,3 +379,58 @@ The existing Playground suite is extended. Each ability gets a test for the norm
 one for capability checks (author vs. admin vs. subscriber). The exposure setting is tested
 by registering a hidden test ability, exposing it, and checking that it shows up through
 `mcp-adapter-discover-abilities`. The settings page is rendered once to catch PHP notices.
+
+## 11. Milestone 3: implementation notes
+
+### 11.1 Shared import pipeline
+
+`Importer` (`src/class-importer.php`) holds everything the three upload paths (single PUT,
+chunked, inline) share:
+- `prepare()`: type, extension, size and post checks, and metadata sanitizing (as the
+  requesting user);
+- `import_file()`: size and checksum check, permission re-check as the owner, content
+  sniffing, GPS removal, `media_handle_sideload()`, alt text and featured image.
+
+The type configuration lives there too. The `mime_type` enum in the schemas is built from it
+at registration, so enabling PDF takes effect on the next request.
+
+### 11.2 Chunked uploads
+
+- **Protocol:** `PUT` (or `POST`) to the slot URL with `Content-Range: bytes START-END/TOTAL`.
+  TOTAL must equal `size_bytes`.
+- **Strictly sequential:** START must equal `received_bytes`. Otherwise the server answers
+  `409` with `expected_offset`, which makes resuming trivial and keeps the server simple (no
+  sparse files, no reassembly).
+- **Locking:** each chunk claims the offset with compare-and-swap (`chunk_lock` holds a
+  timestamp). A lock older than 120 s counts as abandoned, so a client that died mid-chunk
+  doesn't block the slot forever.
+- **Storage:** `uploads/exab-chunks/{slot}-{hmac}.part`. The HMAC uses the auth salt, so the
+  name can't be derived from the public slot ID. The uploads directory is used instead of the
+  system temp dir because partial files must survive between requests (and, on multi-server
+  setups, uploads is the directory most likely to be shared).
+- **Expiry:** sliding, so every accepted chunk extends `expires_at` by the TTL.
+- **Errors that don't burn the slot:** bad token, wrong content type, malformed or wrong
+  ranges, oversized chunks, wrong offset. Write failures and failed final checks (size,
+  checksum, content) mark it `failed` and delete the partial file.
+
+### 11.3 GPS removal
+
+- Done in place (`Gps_Scrubber`), never by re-encoding. Re-encoding with GD would lose all
+  metadata and image quality. `Imagick::stripImage()` would also drop the orientation and the
+  ICC profile.
+- **EXIF:** the GPS IFD's entries and every value they point to are zeroed. The GPS pointer in
+  IFD0 stays and points to an empty IFD, which is valid TIFF.
+- **XMP:** the values of `exif:GPS*` attributes and elements are replaced by spaces of the same
+  length.
+- **PNG:** CRCs are recomputed for modified chunks.
+- **Robustness:** every offset is bounds-checked, and malformed data is left unchanged.
+- **Not covered:** AVIF (ISO BMFF `Exif` items) and compressed PNG `zTXt`/`iTXt`. HEIC, the
+  default format of iPhone photos, isn't an accepted upload type at all. Convert to JPEG before
+  uploading; the GPS data in the resulting JPEG is then removed.
+
+### 11.4 Deviations from the original plan
+
+- No separate `exab-upload` settings for size limits. They remain filters, and only the two
+  options with security impact (PDF, GPS) are on the settings page.
+- PDF sniffing only checks the `%PDF-` magic. `media_handle_sideload()` additionally runs
+  WordPress' own file type checks.

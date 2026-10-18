@@ -53,10 +53,63 @@ add_action(
 	}
 );
 
+// Small chunks, so the ~200 KB fixture is sent in several pieces.
+add_filter( 'exab_chunk_max_bytes', fn() => 100000 );
+
 add_action(
 	'rest_api_init',
 	function () {
 		$admin_only = fn() => current_user_can( 'manage_options' );
+
+		// Sets one of the plugin's own options (exab_*).
+		register_rest_route(
+			'exab-e2e/v1',
+			'/option',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => $admin_only,
+				'callback'            => function ( WP_REST_Request $request ) {
+					$name = (string) $request['name'];
+					if ( ! str_starts_with( $name, 'exab_' ) ) {
+						return new WP_Error( 'bad_option', 'only exab_* options', array( 'status' => 400 ) );
+					}
+					update_option( $name, $request['value'] );
+					return array( $name => get_option( $name ) );
+				},
+			)
+		);
+
+		// Runs the GPS scrubber on arbitrary bytes (formats and malformed input without a real upload).
+		register_rest_route(
+			'exab-e2e/v1',
+			'/scrub',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => $admin_only,
+				'callback'            => function ( WP_REST_Request $request ) {
+					$data    = base64_decode( (string) $request['data_base64'] );
+					$removed = \Exab\Gps_Scrubber::scrub( $data, (string) $request['mime'] );
+					return array(
+						'removed'     => $removed,
+						'data_base64' => base64_encode( $data ),
+					);
+				},
+			)
+		);
+
+		// Lists partial chunk files, to check that they are cleaned up.
+		register_rest_route(
+			'exab-e2e/v1',
+			'/chunk-files',
+			array(
+				'methods'             => 'GET',
+				'permission_callback' => $admin_only,
+				'callback'            => function () {
+					$files = glob( \Exab\Upload_Slots::chunk_dir() . '/*.part' );
+					return array( 'files' => array_map( 'basename', $files ? $files : array() ) );
+				},
+			)
+		);
 
 		// Lets the tests expire a slot without waiting for the TTL.
 		register_rest_route(
