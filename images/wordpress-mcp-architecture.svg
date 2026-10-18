@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 880" width="1200" height="880" font-family="DejaVu Sans, sans-serif">
+  <defs>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fde"/></marker>
+    <marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d9731a"/></marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a929c"/></marker>
+    <style>
+      .t  { font-size: 19px; font-weight: bold; fill: #1f2328; }
+      .s  { font-size: 14px; fill: #4a525c; }
+      .lb { font-size: 13px; fill: #5b636d; }
+      .zone { font-size: 14px; font-weight: bold; fill: #5b636d; letter-spacing: 0.5px; }
+      .blue { fill: #e8f0fe; stroke: #2f6fde; stroke-width: 2; }
+      .orange { fill: #fdf0e3; stroke: #d9731a; stroke-width: 2; }
+      .gray { fill: #f1f3f5; stroke: #8a929c; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="880" fill="#ffffff"/>
+
+  <!-- Your machine -->
+  <rect x="40" y="30" width="1120" height="110" rx="12" fill="#f6f7f9" stroke="#c9ced6" stroke-width="1.5"/>
+  <text x="60" y="54" class="zone">YOUR MACHINE</text>
+
+  <rect x="140" y="64" width="260" height="60" rx="8" class="blue"/>
+  <text x="270" y="90" text-anchor="middle" class="t">Claude Code</text>
+  <text x="270" y="112" text-anchor="middle" class="s">MCP client</text>
+
+  <line x1="400" y1="94" x2="556" y2="94" stroke="#2f6fde" stroke-width="2.5" marker-end="url(#ab)"/>
+  <text x="478" y="86" text-anchor="middle" class="lb">stdio</text>
+
+  <rect x="560" y="64" width="360" height="60" rx="8" class="blue"/>
+  <text x="740" y="90" text-anchor="middle" class="t">mcp-wordpress-remote</text>
+  <text x="740" y="112" text-anchor="middle" class="s">stdio ⇄ HTTP proxy, adds auth</text>
+  <text x="935" y="90" class="lb">optional: only needed for</text>
+  <text x="935" y="108" class="lb">stdio-only clients</text>
+
+
+  <!-- WordPress container -->
+  <rect x="40" y="172" width="1120" height="600" rx="12" fill="#fbfbfc" stroke="#8a929c" stroke-width="1.5"/>
+  <text x="60" y="198" class="zone">WORDPRESS 7.x</text>
+  <!-- HTTPS into WordPress -->
+  <line x1="740" y1="124" x2="740" y2="211" stroke="#2f6fde" stroke-width="2.5" marker-end="url(#ab)"/>
+  <text x="752" y="160" class="lb">HTTPS  /wp-json/mcp/mcp-adapter-default-server</text>
+  <text x="60" y="226" class="zone" fill="#2f6fde" style="fill:#2f6fde">① OUTSIDE AI → WORDPRESS (MCP)</text>
+
+  <rect x="540" y="215" width="400" height="80" rx="8" class="blue"/>
+  <text x="740" y="246" text-anchor="middle" class="t">MCP Adapter</text>
+  <text x="740" y="268" text-anchor="middle" class="s">plugin · 3 meta-tools:</text>
+  <text x="740" y="286" text-anchor="middle" class="s">discover / get-info / execute</text>
+
+  <line x1="740" y1="295" x2="740" y2="366" stroke="#2f6fde" stroke-width="2.5" marker-end="url(#ab)"/>
+  <text x="752" y="336" class="lb">only abilities with mcp.public = true</text>
+
+  <rect x="440" y="370" width="600" height="64" rx="8" class="gray"/>
+  <text x="740" y="397" text-anchor="middle" class="t">Abilities API</text>
+  <text x="740" y="419" text-anchor="middle" class="s">core since 6.9 · name, JSON schema, permission, execute</text>
+
+  <rect x="440" y="500" width="260" height="60" rx="8" class="blue"/>
+  <text x="570" y="526" text-anchor="middle" class="t">core/*</text>
+  <text x="570" y="548" text-anchor="middle" class="s">3 info abilities</text>
+
+  <rect x="740" y="500" width="300" height="60" rx="8" class="blue"/>
+  <text x="890" y="526" text-anchor="middle" class="t">Enable Abilities for MCP</text>
+  <text x="890" y="548" text-anchor="middle" class="s">ewpa/* · 100+ abilities</text>
+
+  <line x1="570" y1="500" x2="570" y2="438" stroke="#2f6fde" stroke-width="2" marker-end="url(#ab)"/>
+  <line x1="890" y1="500" x2="890" y2="438" stroke="#2f6fde" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="580" y="474" class="lb">register</text>
+  <text x="900" y="474" class="lb">register</text>
+
+  <!-- AI plugin registers its own (non-public) abilities -->
+  <path d="M205,664 L205,402 L436,402" fill="none" stroke="#8a929c" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ag)"/>
+  <text x="218" y="470" class="lb">registers its own abilities,</text>
+  <text x="218" y="488" class="lb">not mcp.public → not on MCP</text>
+
+  <!-- Divider -->
+  <line x1="60" y1="600" x2="1140" y2="600" stroke="#c9ced6" stroke-width="1.5" stroke-dasharray="8 6"/>
+  <text x="225" y="636" class="zone" style="fill:#d9731a">② WORDPRESS → AI (NO MCP INVOLVED)</text>
+
+  <rect x="80" y="664" width="250" height="64" rx="8" class="orange"/>
+  <text x="205" y="691" text-anchor="middle" class="t">AI plugin</text>
+  <text x="205" y="713" text-anchor="middle" class="s">editor experiments</text>
+
+  <line x1="330" y1="696" x2="396" y2="696" stroke="#d9731a" stroke-width="2.5" marker-end="url(#ao)"/>
+
+  <rect x="400" y="664" width="340" height="64" rx="8" class="orange"/>
+  <text x="570" y="691" text-anchor="middle" class="t">AI Client + Connectors</text>
+  <text x="570" y="713" text-anchor="middle" class="s">core since 7.0 · Settings → Connectors</text>
+
+  <line x1="740" y1="696" x2="786" y2="696" stroke="#d9731a" stroke-width="2.5" marker-end="url(#ao)"/>
+
+  <rect x="790" y="664" width="330" height="64" rx="8" class="orange"/>
+  <text x="955" y="691" text-anchor="middle" class="t">AI Provider for OpenAI</text>
+  <text x="955" y="713" text-anchor="middle" class="s">connector plugin</text>
+
+  <!-- External provider -->
+  <line x1="955" y1="728" x2="955" y2="796" stroke="#d9731a" stroke-width="2.5" marker-end="url(#ao)"/>
+  <text x="967" y="760" class="lb">HTTPS</text>
+  <rect x="790" y="800" width="330" height="56" rx="8" fill="#ffffff" stroke="#d9731a" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="955" y="825" text-anchor="middle" class="t">OpenAI API</text>
+  <text x="955" y="845" text-anchor="middle" class="s">external</text>
+</svg>

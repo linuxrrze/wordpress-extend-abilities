@@ -1,0 +1,146 @@
+<!-- wp:paragraph -->
+<p>For a few weeks now Claude Code has been writing drafts, tagging posts and fixing typos on this blog through MCP. Along the way three plugins with "AI" or "MCP" in their name ended up on my wordpress instance: <strong>MCP Adapter</strong>, <strong>Enable Abilities for MCP</strong> and the official <strong>AI</strong> plugin. When I wanted to add a feature (uploading images from my local disk), I first had to answer a simple question: which of them does what, and which do I actually need?</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:heading -->
+<h2 class="wp-block-heading">Two directions, one shared registry</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>WordPress has split "AI" into separate building blocks. It helps to separate two directions:</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:list -->
+<ul class="wp-block-list"><!-- wp:list-item -->
+<li><strong>An outside AI operates WordPress.</strong> An agent like Claude Code, Cursor or opencode calls functions on the site over the <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>. WordPress doesn't talk to any LLM here. It only executes.</li>
+<!-- /wp:list-item -->
+
+<!-- wp:list-item -->
+<li><strong>WordPress uses an AI.</strong> The site itself calls a model, for example to suggest alt text or an excerpt in the block editor. MCP isn't involved at all.</li>
+<!-- /wp:list-item --></ul>
+<!-- /wp:list -->
+
+<!-- wp:paragraph -->
+<p>Both directions share one piece: the <strong>Abilities API</strong>, in core since WordPress 6.9. An <em>ability</em> is a registered function with a name (<code>namespace/name</code>), a JSON schema for input and output, a permission callback and an execute callback. It's the common description that both humans and machines can read.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:image {"id":2478,"sizeSlug":"full","linkDestination":"media"} -->
+<figure class="wp-block-image size-full"><a href="https://blog.linux-ng.de/wp-content/uploads/2026/10/wordpress-mcp-architecture.png"><img src="https://blog.linux-ng.de/wp-content/uploads/2026/10/wordpress-mcp-architecture.png" alt="Diagram: Claude Code talks via stdio to the mcp-wordpress-remote proxy, which calls the MCP Adapter over HTTPS. The MCP Adapter exposes abilities from the core Abilities API that are marked mcp.public; core and Enable Abilities for MCP register them. Separately, the AI plugin uses the core AI Client and Connectors and the AI Provider for OpenAI to call the OpenAI API, without MCP." class="wp-image-2478"/></a><figcaption class="wp-element-caption">Two directions: an outside agent operating WordPress via MCP (blue), and WordPress calling an AI provider itself (orange).</figcaption></figure>
+<!-- /wp:image -->
+
+<!-- wp:heading -->
+<h2 class="wp-block-heading">MCP Adapter: the protocol bridge</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>The <a href="https://github.com/WordPress/mcp-adapter">MCP Adapter</a> is the official plugin that turns abilities into MCP tools. It isn't in core yet. Out of the box it registers one server at <code>/wp-json/mcp/mcp-adapter-default-server</code>, and the interesting detail is what that server offers. It doesn't list every ability as its own tool. Instead it has exactly three meta-tools:</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:list -->
+<ul class="wp-block-list"><!-- wp:list-item -->
+<li><code>mcp-adapter-discover-abilities</code>: what is there?</li>
+<!-- /wp:list-item -->
+
+<!-- wp:list-item -->
+<li><code>mcp-adapter-get-ability-info</code>: what does this one expect and return?</li>
+<!-- /wp:list-item -->
+
+<!-- wp:list-item -->
+<li><code>mcp-adapter-execute-ability</code>: run it with these parameters.</li>
+<!-- /wp:list-item --></ul>
+<!-- /wp:list -->
+
+<!-- wp:paragraph -->
+<p>This keeps the tool list in the client short, no matter how many abilities the site has. Two rules matter. First, an ability is only visible if its metadata says <code>mcp.public = true</code>, and nothing is public by default. Second, authentication is plain WordPress REST auth (application passwords, OAuth, …), and each ability checks its own permissions with normal WordPress capabilities. Plugins can also register additional servers that expose a hand-picked set of abilities as regular MCP tools.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:paragraph -->
+<p>Installed on its own, though, the adapter is a bridge to almost nothing. Core only ships three informational abilities (<code>core/get-site-info</code>, <code>core/get-user-info</code>, <code>core/get-environment-info</code>).</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:heading -->
+<h2 class="wp-block-heading">Enable Abilities for MCP: the actual toolbox</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>This is where <a href="https://mcp.fabiomontenegro.com/">Enable Abilities for MCP</a> comes in (on <a href="https://wordpress.org/plugins/enable-abilities-for-mcp/">wordpress.org</a>). It's a third-party plugin that registers over a hundred abilities in the <code>ewpa/</code> namespace and marks them public for MCP. They cover posts, pages and custom post types, categories and tags, comments, menus, post and term meta, media (listing, upload from URL, an alt-text audit), cache purging, and integrations for SEO plugins (Rank Math, Yoast, SEOPress), multilanguage plugins, WooCommerce, Elementor, JetEngine and more.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:paragraph -->
+<p>Every ability can be toggled under <em>Settings → WP Abilities</em>, and that also works for abilities other plugins register. The plugin also brings extra authentication options for the MCP routes: an OAuth 2.1 connector for claude.ai, a beta connector for ChatGPT, and a single admin bearer token. It needs the MCP Adapter. Older versions bundled a copy, but since 2.11.1 you install the adapter separately.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:paragraph -->
+<p>In practice, when Claude creates a draft on this blog, the call chain looks like this:</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:code -->
+<pre class="wp-block-code"><code>mcp-adapter-execute-ability
+  ability_name: "ewpa/create-post"
+  parameters:   { "title": "…", "content": "&lt;!-- wp:paragraph --&gt;…", "status": "draft" }
+
+→ MCP Adapter checks auth, looks up the ability
+→ Abilities API validates the input against the schema, runs permission_callback
+→ EWPA's execute_callback calls wp_insert_post()
+→ { "post_id": 2490, "status": "draft", … }</code></pre>
+<!-- /wp:code -->
+
+<!-- wp:heading -->
+<h2 class="wp-block-heading">The AI plugin: AI inside the editor</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>The official <a href="https://github.com/WordPress/ai">AI plugin</a> is the one that's easiest to misread, and I misread it too. Despite the name, it's <strong>not part of the MCP path</strong>. It's the WordPress team's collection of AI <em>experiments</em> for wp-admin and the block editor: alt-text generation, title, excerpt and slug suggestions, summaries, translation, image generation, comment moderation helpers, an Abilities Explorer, request logging and more. Each one is opt-in.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:paragraph -->
+<p>The plugin doesn't include a model. Since WordPress 7.0, core ships an <strong>AI Client</strong> and a <em>Settings → Connectors</em> screen where provider credentials live centrally. Connector plugins such as <em>AI Provider for OpenAI</em> (or Anthropic, Google, or a local Ollama) plug into it, and the AI plugin uses whatever is configured there. The AI plugin also registers a few abilities of its own, but MCP integration is still marked "coming soon". On my site none of them show up over MCP.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:heading -->
+<h2 class="wp-block-heading">The client side: a proxy you may not need</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Most setup guides, including the one I followed, configure the MCP client with <code>npx @automattic/mcp-wordpress-remote</code>. It's a small <strong>stdio-to-HTTP proxy</strong> with no tools of its own. It forwards MCP messages to the adapter endpoint and adds authentication (application password, JWT or OAuth 2.1). Its README is refreshingly honest: if your client speaks HTTP MCP and can authenticate, connect it directly. Claude Code can:</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:code -->
+<pre class="wp-block-code"><code>claude mcp add --scope user --transport http wordpress \
+  https://example.com/wp-json/mcp/mcp-adapter-default-server \
+  --header "Authorization: Basic $(printf 'agent-user:xxxx xxxx xxxx xxxx' | base64 -w0)"</code></pre>
+<!-- /wp:code -->
+
+<!-- wp:paragraph -->
+<p>For older MCP setups: Automattic's earlier <code>wordpress-mcp</code> plugin, which had its own MCP server, is archived. The MCP Adapter is its successor.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:heading -->
+<h2 class="wp-block-heading">What do you actually need?</h2>
+<!-- /wp:heading -->
+
+<!-- wp:table -->
+<figure class="wp-block-table"><table class="has-fixed-layout"><thead><tr><th>Goal</th><th>Needed</th><th>Optional</th></tr></thead><tbody><tr><td>An external agent edits content via MCP</td><td>WordPress ≥ 6.9, MCP Adapter, an ability provider (e.g. Enable Abilities for MCP)</td><td>mcp-wordpress-remote (only for stdio-only clients)</td></tr><tr><td>AI features inside the block editor</td><td>WordPress ≥ 7.0, AI plugin, one connector plugin</td><td>–</td></tr><tr><td>Both</td><td>All of the above. They don't depend on each other.</td><td>–</td></tr></tbody></table></figure>
+<!-- /wp:table -->
+
+<!-- wp:heading -->
+<h2 class="wp-block-heading">Things I cleaned up along the way</h2>
+<!-- /wp:heading -->
+
+<!-- wp:list -->
+<ul class="wp-block-list"><!-- wp:list-item -->
+<li><strong>Don't let the agent be admin.</strong> Abilities respect WordPress capabilities, so give the agent its own user with the Editor or Author role and its own application password. That's the cheapest way to limit what a confused or prompt-injected model can do.</li>
+<!-- /wp:list-item -->
+
+<!-- wp:list-item -->
+<li><strong>Switch off abilities for plugins you don't run.</strong> I had about 35 SEO, multilanguage, JetEngine and Code Snippets abilities enabled for plugins that aren't even installed. They add noise to every <code>discover-abilities</code> call and attack surface for nothing.</li>
+<!-- /wp:list-item -->
+
+<!-- wp:list-item -->
+<li><strong>One credential, one place.</strong> My Claude Code config had the same application password in the user scope and copied into five project scopes. The user scope is enough.</li>
+<!-- /wp:list-item -->
+
+<!-- wp:list-item -->
+<li><strong>Pin what runs with your credentials.</strong> <code>npx -y …@latest</code> fetches whatever version is newest whenever the cache misses, and that process can see the password. Pin a version or drop the proxy.</li>
+<!-- /wp:list-item --></ul>
+<!-- /wp:list -->
