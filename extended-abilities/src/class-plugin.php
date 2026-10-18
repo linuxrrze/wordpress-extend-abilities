@@ -31,6 +31,7 @@ final class Plugin {
 		add_action( 'wp_abilities_api_init', array( Upload_Slots::class, 'register_abilities' ) );
 		add_action( 'wp_abilities_api_init', array( Media_Abilities::class, 'register_abilities' ) );
 		add_action( 'wp_abilities_api_init', array( Content_Abilities::class, 'register_abilities' ) );
+		add_action( 'wp_abilities_api_init', array( Media_Replacer::class, 'register_abilities' ) );
 		add_action( 'rest_api_init', array( Upload_Slots::class, 'register_rest_routes' ) );
 		add_action( self::CLEANUP_HOOK, array( Slot_Store::class, 'delete_stale' ) );
 		Expose_Abilities::init();

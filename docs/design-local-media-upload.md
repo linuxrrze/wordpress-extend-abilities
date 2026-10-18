@@ -1,6 +1,6 @@
 # Design: *Extended Abilities* (local media upload over MCP and more)
 
-Status: **milestones 1–3 implemented** (0.3.0, see [`../extended-abilities/`](../extended-abilities/README.md)), M4 open · Target: WordPress ≥ 6.9 (tested against 7.1.3), MCP Adapter ≥ 0.7
+Status: **milestones 1–4 implemented** (0.4.0, see [`../extended-abilities/`](../extended-abilities/README.md) and [`../client/`](../client/README.md)) · Target: WordPress ≥ 6.9 (tested against 7.1.3), MCP Adapter ≥ 0.7
 
 ## 1. Goal
 
@@ -265,7 +265,8 @@ extended-abilities/
    that exposes other plugins' abilities to MCP.
 3. **M3 (done, 0.3.0, see §11):** `upload-media-inline`, optional PDF uploads, GPS
    removal, chunked (resumable) uploads for large files.
-4. **M4 (optional):** `exab-upload` stdio helper for shell-less clients; `replace-media-file`.
+4. **M4 (done, 0.4.0, see §12):** `exab-upload` stdio helper for shell-less clients;
+   `replace-media-file`.
 
 ## 9. Open questions
 
@@ -434,3 +435,44 @@ at registration, so enabling PDF takes effect on the next request.
   options with security impact (PDF, GPS) are on the settings page.
 - PDF sniffing only checks the `%PDF-` magic. `media_handle_sideload()` additionally runs
   WordPress' own file type checks.
+
+## 12. Milestone 4: implementation notes
+
+### 12.1 `exab/replace-media-file`
+
+- **Reuses the slot machinery.** `Media_Replacer::prepare()` builds slot metadata with
+  `replace_attachment_id`, and `Upload_Slots::open_slot()` (split out of `create()`) stores it.
+  Chunked uploads, checksums, content sniffing and GPS removal therefore apply unchanged, and
+  `Importer` only branches at the very end (`Media_Replacer::replace()` instead of
+  `media_handle_sideload()`).
+- **Same type only.** The slot's MIME type is the attachment's. Changing type would change
+  the extension and therefore every URL.
+- **Target path:** the original upload (`wp_get_original_image_path()`), not a `-scaled` or
+  `-rotated` copy. Old files go through `wp_delete_attachment_files()`; backups are passed
+  only when present, because that branch reads `$meta['file']`, which non-images lack.
+- **URL mapping:** old and new URLs of every size, plus `full` (and `original` for scaled
+  images). A size that no longer exists maps to the new full URL. `strtr()` applies all
+  mappings in one pass, longest match first, so `name.png` never clobbers
+  `name-1024x751.png`.
+- **Content rewrite:** done through `wp_update_post()`, which creates a revision and fires the
+  normal hooks, and only for posts the current user may edit. The others are reported, never
+  changed: replacing one's own image must not become a way to edit other people's posts.
+- **Annotated destructive** (the old file is gone), so MCP clients ask for confirmation.
+- **Not done:** post meta (page builders), `srcset` width descriptors in hard-coded HTML, and
+  cache busting. All three are documented as limitations.
+
+### 12.2 `exab-upload` helper
+
+- **Python standard library only**, instead of the Node MCP SDK. One auditable file; nothing
+  from a package registry runs with the WordPress credentials. MCP over stdio is small enough
+  to implement directly: `initialize` (with version negotiation), `tools/list`, `tools/call`
+  and `ping`.
+- **Talks REST, not MCP, to WordPress** (`/wp-json/wp-abilities/v1/abilities/*/run`). That is
+  simpler than an MCP session, and works even where the MCP Adapter isn't installed.
+- **Allowlist:** `os.path.realpath` before the containment check (symlinks and `..`),
+  `commonpath`-based containment (no prefix tricks like `/allowed-evil`), hidden components
+  refused by default, extension and magic-byte checks before any upload.
+- **Chunking:** follows `max_chunk_bytes` from the slot, and resumes at `expected_offset` on a
+  409 (at most three times in a row).
+- **Tool errors** (refusals, HTTP errors) come back as `isError: true` results that the agent
+  can read. Only protocol errors become JSON-RPC errors.

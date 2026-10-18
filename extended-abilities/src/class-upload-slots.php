@@ -139,12 +139,23 @@ final class Upload_Slots {
 	 * @return array|WP_Error
 	 */
 	public static function create( $input ) {
-		$size = (int) $input['size_bytes'];
-		$meta = Importer::prepare( $input, $size );
+		$meta = Importer::prepare( $input, (int) $input['size_bytes'] );
 		if ( is_wp_error( $meta ) ) {
 			return $meta;
 		}
+		return self::open_slot( $meta );
+	}
+
+	/**
+	 * Stores a slot for prepared upload metadata and returns the client instructions.
+	 * Shared by exab/create-upload-slot and exab/replace-media-file.
+	 *
+	 * @param array $meta Upload metadata from Importer::prepare() or Media_Replacer::prepare().
+	 * @return array|WP_Error Matches Schemas::create_slot_output().
+	 */
+	public static function open_slot( array $meta ) {
 		$user_id = $meta['user_id'];
+		$size    = (int) $meta['size_bytes'];
 
 		/**
 		 * Filters how many open (pending or receiving) slots one user may hold at the same time.
@@ -513,6 +524,9 @@ final class Upload_Slots {
 			'url'             => $url ? $url : null,
 			'set_as_featured' => (bool) $slot['set_as_featured'],
 			'gps_removed'     => (bool) ( $slot['gps_removed'] ?? false ),
+			'replaced'        => ! empty( $slot['replace_attachment_id'] ) && Slot_Store::STATUS_COMPLETED === $slot['status'],
+			'posts_updated'   => array_map( 'intval', $slot['posts_updated'] ?? array() ),
+			'posts_skipped'   => array_map( 'intval', $slot['posts_skipped'] ?? array() ),
 			'error'           => $slot['error'],
 		);
 	}

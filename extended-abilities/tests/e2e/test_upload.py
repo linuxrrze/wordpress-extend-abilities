@@ -1100,6 +1100,303 @@ def test_pdf_upload_when_enabled():
         set_option("exab_allow_pdf", "0")
 
 
+# --- milestone 4: replace media files ---------------------------------------
+
+
+def create_post(content, user):
+    status, body, _ = http("POST", "/wp-json/wp/v2/posts", {"title": "uses image", "content": content, "status": "draft"}, user=user)
+    assert status == 201, body
+    return body["id"]
+
+
+def raw_content(post_id, user):
+    return http("GET", f"/wp-json/wp/v2/posts/{post_id}?context=edit", user=user)[1]["content"]["raw"]
+
+
+def media_item(attachment_id):
+    return run_ability("exab/get-media-item", {"attachment_id": attachment_id}, "author", readonly=True)[1]
+
+
+def replace(attachment_id, data, user="author", content_type=None):
+    status, slot, _ = run_ability(
+        "exab/replace-media-file",
+        {"attachment_id": attachment_id, "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()},
+        user,
+    )
+    assert status == 200, f"replace slot: {status} {slot}"
+    return slot, put(slot, data, content_type=content_type or slot["headers"]["Content-Type"])
+
+
+def http_status(url):
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return resp.status
+    except urllib.error.HTTPError as err:
+        return err.code
+
+
+def test_replace_keeps_id_and_rewrites_content_where_allowed():
+    attachment_id = upload(FIXTURE, filename="to-replace.png", alt_text="Keep this alt", title="Keep this title")
+    before = media_item(attachment_id)
+    old_large = before["sizes"]["large"]["url"]
+    old_full = before["url"]
+
+    own_post = create_post(f'<img src="{old_large}"/> and <a href="{old_full}">full</a>', "author")
+    admin_post = create_post(f'<img src="{old_large}"/>', "admin")
+
+    new_data = make_png(1200, 600, seed=50)
+    slot, (status, body, _) = replace(attachment_id, new_data)
+    assert slot["headers"]["Content-Type"] == "image/png"
+    assert status == 201 and body["replaced"] is True, f"{status} {body}"
+    assert body["attachment_id"] == attachment_id
+    assert body["posts_updated"] == [own_post] and body["posts_skipped"] == [admin_post], body
+
+    after = media_item(attachment_id)
+    assert after["url"] == old_full, "main URL stays the same"
+    assert (after["width"], after["height"]) == (1200, 600), after
+    assert after["alt_text"] == "Keep this alt" and after["title"] == "Keep this title"
+    new_large = after["sizes"]["large"]["url"]
+    assert new_large != old_large, "large size has new dimensions, so a new name"
+    assert download(old_full) == new_data
+    assert http_status(old_large) == 404, "old size files are deleted"
+
+    content = raw_content(own_post, "author")
+    assert new_large in content and old_large not in content and old_full in content, content
+    assert old_large in raw_content(admin_post, "admin"), "posts the user may not edit stay unchanged"
+    revisions = run_ability("exab/list-revisions", {"post_id": own_post}, "author", readonly=True)[1]["revisions"]
+    assert revisions, "the content update is undoable"
+
+
+def test_replace_scaled_image_maps_scaled_url_to_new_file():
+    big = make_png(2700, 60, seed=51)  # wider than WordPress' 2560 px threshold -> "-scaled" copy
+    attachment_id = upload(big, filename="wide.png")
+    old_full = media_item(attachment_id)["url"]
+    assert "-scaled" in old_full, old_full
+    post_id = create_post(f'<img src="{old_full}"/>', "author")
+
+    small = make_png(300, 60, seed=52)
+    _, (status, body, _) = replace(attachment_id, small)
+    assert status == 201 and body["posts_updated"] == [post_id], f"{status} {body}"
+    new_full = media_item(attachment_id)["url"]
+    assert "-scaled" not in new_full and new_full.endswith("/wide.png"), new_full
+    assert download(new_full) == small
+    assert new_full in raw_content(post_id, "author") and old_full not in raw_content(post_id, "author")
+
+
+def test_replace_in_chunks():
+    attachment_id = upload(make_png(32, 32, seed=53), filename="grow.png")
+    status, slot, _ = run_ability(
+        "exab/replace-media-file",
+        {"attachment_id": attachment_id, "size_bytes": len(FIXTURE), "sha256": hashlib.sha256(FIXTURE).hexdigest()},
+        "author",
+    )
+    assert status == 200 and slot["max_chunk_bytes"] < len(FIXTURE)
+    for offset, part in chunks_of(FIXTURE, slot["max_chunk_bytes"]):
+        status, body, _ = put_chunk(slot, part, offset)
+    assert status == 201 and body["replaced"] is True, f"{status} {body}"
+    assert download(media_item(attachment_id)["url"]) == FIXTURE
+
+
+def test_replace_rejects_other_type_and_keeps_old_file():
+    original = make_png(40, 40, seed=54)
+    attachment_id = upload(original, filename="stay.png")
+    jpeg = fixture("jpeg")
+    slot, result = replace(attachment_id, jpeg)
+    expect_error(result, "exab_content_mismatch", 415)
+    assert download(media_item(attachment_id)["url"]) == original, "a failed replace must not touch the file"
+
+
+def test_replace_permissions_and_missing_item():
+    attachment_id = upload(make_png(20, 20, seed=55), filename="mine.png")
+    expect_forbidden(run_ability("exab/replace-media-file", {"attachment_id": attachment_id, "size_bytes": 10}, "author2"))
+    expect_error(run_ability("exab/replace-media-file", {"attachment_id": 999999, "size_bytes": 10}, "author"), "exab_attachment_not_found")
+
+
+def test_replace_is_marked_destructive():
+    status, body, _ = http("GET", "/wp-json/wp-abilities/v1/abilities/exab/replace-media-file", user="author")
+    assert status == 200 and body["meta"]["annotations"]["destructive"] is True, body
+
+
+# --- milestone 4: exab-upload stdio helper ------------------------------------
+
+HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "client", "exab_upload.py")
+
+
+class StdioMcp:
+    """Talks to the helper the way an MCP client does: JSON-RPC lines over stdin/stdout."""
+
+    def __init__(self, allowed_dirs, user="author", extra_env=None):
+        import subprocess
+
+        u = CREDS["users"][user]
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "WP_URL": BASE,
+            "WP_USERNAME": u["login"],
+            "WP_APP_PASSWORD": u["password"],
+            "EXAB_ALLOWED_DIRS": os.pathsep.join(allowed_dirs),
+        }
+        env.update(extra_env or {})
+        self.proc = subprocess.Popen(
+            [sys.executable, "-I", HELPER], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=env,
+        )
+        self.next_id = 1
+        init = self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}})
+        assert init["result"]["protocolVersion"] == "2025-06-18", init
+        self.notify("notifications/initialized")
+
+    def notify(self, method):
+        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method}) + "\n")
+        self.proc.stdin.flush()
+
+    def request(self, method, params=None):
+        msg_id, self.next_id = self.next_id, self.next_id + 1
+        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params or {}}) + "\n")
+        self.proc.stdin.flush()
+        response = json.loads(self.proc.stdout.readline())
+        assert response["id"] == msg_id, response
+        return response
+
+    def call(self, tool, arguments):
+        result = self.request("tools/call", {"name": tool, "arguments": arguments})["result"]
+        return result["isError"], (result.get("structuredContent") or result["content"][0]["text"])
+
+    def close(self):
+        self.proc.stdin.close()
+        self.proc.wait(timeout=10)
+        self.proc.stdout.close()
+        self.proc.stderr.close()
+
+
+def helper_sandbox():
+    """An allowed directory with test files, and an outside directory with a 'secret'."""
+    import tempfile
+
+    allowed = tempfile.mkdtemp(prefix="exab-allowed-")
+    outside = tempfile.mkdtemp(prefix="exab-outside-")
+    files = {
+        "photo.jpg": jpeg_with_gps(fixture("jpeg")),
+        "big.png": FIXTURE,
+        "small.png": make_png(30, 30, seed=60),
+        "notes.txt": b"hello",
+        "fake.png": b"not a png at all",
+        ".hidden/secret.png": make_png(8, 8, seed=61),
+    }
+    for name, data in files.items():
+        os.makedirs(os.path.dirname(os.path.join(allowed, name)), exist_ok=True)
+        with open(os.path.join(allowed, name), "wb") as fh:
+            fh.write(data)
+    with open(os.path.join(outside, "secret.png"), "wb") as fh:
+        fh.write(make_png(8, 8, seed=62))
+    os.symlink(os.path.join(outside, "secret.png"), os.path.join(allowed, "link.png"))
+    return allowed, outside, files
+
+
+def test_helper_lists_tools_and_directories():
+    allowed, _outside, _files = helper_sandbox()
+    mcp = StdioMcp([allowed])
+    try:
+        names = {t["name"] for t in mcp.request("tools/list")["result"]["tools"]}
+        assert names == {"upload_local_file", "replace_local_file", "list_allowed_directories"}, names
+        is_error, data = mcp.call("list_allowed_directories", {})
+        assert not is_error and data["allowed_directories"] == [os.path.realpath(allowed)], data
+        assert mcp.request("ping")["result"] == {}
+        assert mcp.request("no/such/method")["error"]["code"] == -32601
+        assert "error" in mcp.request("tools/call", {"name": "nope", "arguments": {}})
+    finally:
+        mcp.close()
+
+
+def test_helper_uploads_with_metadata_and_gps_removal():
+    allowed, _outside, files = helper_sandbox()
+    mcp = StdioMcp([allowed])
+    try:
+        is_error, data = mcp.call("upload_local_file", {
+            "path": os.path.join(allowed, "photo.jpg"), "alt_text": "from the helper",
+            "post_id": CREDS["posts"]["by_author"], "set_featured": True,
+        })
+        assert not is_error, data
+        assert data["gps_removed"] is True and data["set_as_featured"] is True and data["bytes"] == len(files["photo.jpg"])
+        assert media_item(data["attachment_id"])["alt_text"] == "from the helper"
+        check_jpeg_scrubbed(download(data["url"]))
+    finally:
+        mcp.close()
+
+
+def test_helper_uploads_large_files_in_chunks():
+    allowed, _outside, _files = helper_sandbox()
+    mcp = StdioMcp([allowed])
+    try:
+        is_error, data = mcp.call("upload_local_file", {"path": os.path.join(allowed, "big.png")})
+        assert not is_error, data
+        assert len(FIXTURE) > 100000 and download(data["url"]) == FIXTURE
+    finally:
+        mcp.close()
+
+
+def test_helper_refuses_everything_outside_the_allowlist():
+    allowed, outside, _files = helper_sandbox()
+    mcp = StdioMcp([allowed])
+    try:
+        cases = {
+            os.path.join(outside, "secret.png"): "outside the allowed",
+            os.path.join(allowed, "link.png"): "outside the allowed",                 # symlink to outside
+            os.path.join(allowed, "..", os.path.basename(outside), "secret.png"): "outside the allowed",
+            os.path.join(allowed, ".hidden", "secret.png"): "hidden",
+            os.path.join(allowed, "notes.txt"): "Unsupported file type",
+            os.path.join(allowed, "fake.png"): "not a image/png file",
+            os.path.join(allowed, "missing.png"): "not a regular file",
+            "photo.jpg": "absolute path",
+            os.path.expanduser("~/.ssh/id_ed25519"): "outside the allowed",
+        }
+        for path, expected in cases.items():
+            is_error, text = mcp.call("upload_local_file", {"path": path})
+            assert is_error and expected in text, f"{path}: {text}"
+    finally:
+        mcp.close()
+
+
+def test_helper_hidden_files_only_when_allowed():
+    allowed, _outside, _files = helper_sandbox()
+    mcp = StdioMcp([allowed], extra_env={"EXAB_ALLOW_HIDDEN": "1"})
+    try:
+        is_error, data = mcp.call("upload_local_file", {"path": os.path.join(allowed, ".hidden", "secret.png")})
+        assert not is_error, data
+    finally:
+        mcp.close()
+
+
+def test_helper_replaces_files():
+    allowed, _outside, files = helper_sandbox()
+    attachment_id = upload(make_png(50, 50, seed=63), filename="helper-replace.png")
+    mcp = StdioMcp([allowed])
+    try:
+        is_error, data = mcp.call("replace_local_file", {"attachment_id": attachment_id, "path": os.path.join(allowed, "small.png")})
+        assert not is_error and data["attachment_id"] == attachment_id and "posts_updated" in data, data
+        assert download(media_item(attachment_id)["url"]) == files["small.png"]
+
+        is_error, text = mcp.call("replace_local_file", {"attachment_id": attachment_id, "path": os.path.join(allowed, "photo.jpg")})
+        assert is_error and "image/png" in text and "image/jpeg" in text, text
+    finally:
+        mcp.close()
+
+
+def test_helper_reports_wrong_credentials_and_missing_config():
+    import subprocess
+
+    allowed, _outside, _files = helper_sandbox()
+    mcp = StdioMcp([allowed], extra_env={"WP_APP_PASSWORD": "wrong wrong wrong wrong"})
+    try:
+        is_error, text = mcp.call("upload_local_file", {"path": os.path.join(allowed, "small.png")})
+        assert is_error and "401" in text, text
+    finally:
+        mcp.close()
+
+    result = subprocess.run([sys.executable, "-I", HELPER], input="", capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, timeout=10)
+    assert result.returncode != 0 and "missing environment variables" in result.stderr, result
+
+
 # --- runner ------------------------------------------------------------------
 
 

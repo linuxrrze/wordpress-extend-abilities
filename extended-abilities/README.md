@@ -6,9 +6,31 @@ shell. Built on the core Abilities API (WP ≥ 6.9) and exposed through the
 [MCP Adapter](https://github.com/WordPress/mcp-adapter). Design and background:
 [`../docs/design-local-media-upload.md`](../docs/design-local-media-upload.md).
 
-Status: **0.3.0, milestones 1–3**. Uploads accept JPEG, PNG, GIF, WebP and AVIF, plus PDF
+Status: **0.4.0, milestones 1–4**. Uploads accept JPEG, PNG, GIF, WebP and AVIF, plus PDF
 when enabled. GPS location data is removed from photos by default. Large files can be sent in
-resumable chunks, and tiny ones inline as base64.
+resumable chunks, and tiny ones inline as base64. Existing media files can be replaced in
+place. For MCP clients without a shell, the local helper [`exab-upload`](../client/README.md)
+does the upload.
+
+## Replacing media files
+
+`exab/replace-media-file {attachment_id, size_bytes, sha256}` opens an upload slot in replace
+mode. The file then goes up like any other upload (single PUT or chunked), and passes the same
+checks: size, checksum, content sniffing (it must be the **same type** as the current file) and
+GPS removal. Then:
+
+1. The old file and everything derived from it is deleted: all sizes, `-scaled`/`-rotated`
+   copies, and backups from the image editor.
+2. The new file is written under the **original file name**, and sizes and metadata are
+   regenerated. The attachment ID, title, alt text, caption and parent stay.
+3. URLs that changed (sizes with new dimensions, or a `-scaled` copy that is no longer needed)
+   are rewritten in the content of every post the user **may edit**. Each such update creates
+   a revision. Posts the user may not edit are left alone and reported in `posts_skipped`.
+
+The ability is annotated **destructive**: the old file can't be restored. The main URL stays the
+same unless WordPress scales or rotates one of the two versions. Browsers and CDNs may keep
+showing the old image under an unchanged URL until their cache expires. References in post meta
+(page builders, custom fields) are not rewritten.
 
 Besides uploads, the plugin fills gaps that the standard plugins leave (see design doc §10):
 editing media metadata, scheduling existing drafts, updating pages, restoring revisions, and
@@ -55,6 +77,7 @@ bigger, the base64 costs too many output tokens.
 | `exab/update-page` | idempotent | `edit_post`; `publish_pages` to publish or make private |
 | `exab/list-revisions` | read-only | `edit_post` on the post |
 | `exab/restore-revision` | idempotent | `edit_post` on the post (the current state becomes a new revision first) |
+| `exab/replace-media-file` | **destructive** | `upload_files` + `edit_post` on the attachment; posts are rewritten only where `edit_post` allows |
 
 `get-media-item` also returns ready-to-paste `wp:image` block markup for a chosen size.
 `schedule-post` takes ISO 8601 dates; a date without a UTC offset is in the site time zone.
@@ -149,7 +172,7 @@ tests/e2e/run.sh -k mcp                  # filter by test name
 The blueprint installs MCP Adapter v0.7.1, creates users (admin, two authors, a subscriber)
 with application passwords, test posts, pages and revisions, sets the site time zone to
 Europe/Berlin, generates JPEG and WebP fixtures with GD, limits chunks to 100 KB, and enables
-`WP_DEBUG_LOG`. Any PHP notice, warning or error in that log fails the run. There are 60 tests:
+`WP_DEBUG_LOG`. Any PHP notice, warning or error in that log fails the run. There are 73 tests:
 
 - **Uploads (21):** the happy path with metadata and featured image, POST instead of PUT,
   single use, wrong token, wrong content type, size, checksum and content mismatches, schema
@@ -175,12 +198,23 @@ Europe/Berlin, generates JPEG and WebP fixtures with GD, limits chunks to 100 KB
   - Inline uploads: featured image, `data:` URI with GPS removal, size, base64 and content
     checks, and through MCP.
   - PDF: off by default; when enabled, real vs. fake PDF, and PDFs can't become featured images.
+- **Milestone 4 (13):**
+  - Replace: ID, main URL, title and alt text are kept. The changed size URL is rewritten in
+    your own post (with a revision) and left alone in someone else's. Old size files return
+    404. Also covered: a `-scaled` image replaced by a small one, chunked replacement, wrong
+    type (the old file stays untouched), permissions, and the destructive annotation.
+  - Helper (`client/exab_upload.py`, run as a subprocess over stdio): tools and protocol,
+    upload with metadata and GPS removal, chunked upload, replace (including a type
+    mismatch), wrong password, missing configuration, and every allowlist refusal (outside,
+    symlink, `..`, hidden, `~/.ssh`, wrong type, fake content, relative path).
+  - Both security checks were mutation-tested: with the symlink resolution or the per-post
+    permission check removed, the tests fail.
 
 `tests/` is not needed on a production site. Leave it out when deploying.
 
 ## Deploying
 
 Copy the `extended-abilities` directory (without `tests/`) to `wp-content/plugins/` and
-activate it. The ten `exab/*` abilities then appear in `mcp-adapter-discover-abilities`, and
+activate it. The eleven `exab/*` abilities then appear in `mcp-adapter-discover-abilities`, and
 in EWPA's ability list under Settings → WP Abilities. Check the upload options under
 Settings → Extended Abilities.

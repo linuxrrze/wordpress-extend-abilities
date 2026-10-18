@@ -11,7 +11,8 @@ Notes on the AI/MCP setup of **blog.linux-ng.de** and the design of a small plug
 - Files in this repo:
   - [`blog-article.html`](blog-article.html): blog article draft (Gutenberg markup, also saved as a draft on the blog)
   - [`docs/design-local-media-upload.md`](docs/design-local-media-upload.md): plugin design
-  - [`extended-abilities/`](extended-abilities/README.md): the plugin (milestone 1: local image upload via upload slots)
+  - [`extended-abilities/`](extended-abilities/README.md): the plugin (0.4.0: local uploads via upload slots, chunked and inline; GPS removal; replacing media files; media metadata; scheduling, pages, revisions; exposing other plugins' abilities)
+  - [`client/`](client/README.md): `exab-upload`, a local MCP server for clients without a shell
   - [`images/`](images/): diagram for the blog article (SVG source + PNG)
 
 State as of 2026-10-18, read from the live site through the MCP connection:

@@ -135,7 +135,8 @@ final class Importer {
 	 *
 	 * @param string $tmp  Path of the received file.
 	 * @param array  $meta Metadata from prepare() (slot data has the same keys).
-	 * @return array|WP_Error attachment_id, set_as_featured, gps_removed; or an error.
+	 * @return array|WP_Error attachment_id, set_as_featured, gps_removed (plus posts_updated and
+	 *                        posts_skipped for replacements); or an error.
 	 */
 	public static function import_file( string $tmp, array $meta ) {
 		$result = self::import_or_fail( $tmp, $meta );
@@ -171,6 +172,10 @@ final class Importer {
 		if ( ! current_user_can( 'upload_files' ) ) {
 			return new WP_Error( 'exab_forbidden', 'The upload owner may no longer upload files.', array( 'status' => 403 ) );
 		}
+		$replace_id = (int) ( $meta['replace_attachment_id'] ?? 0 );
+		if ( $replace_id && ! current_user_can( 'edit_post', $replace_id ) ) {
+			return new WP_Error( 'exab_forbidden', sprintf( 'The upload owner may no longer edit media item %d.', $replace_id ), array( 'status' => 403 ) );
+		}
 		$post_id = (int) $meta['post_id'];
 		if ( $post_id && ! current_user_can( 'edit_post', $post_id ) ) {
 			return new WP_Error( 'exab_forbidden', sprintf( 'The upload owner may no longer edit post %d.', $post_id ), array( 'status' => 403 ) );
@@ -189,6 +194,14 @@ final class Importer {
 		$gps_removed = false;
 		if ( Settings::strip_gps() ) {
 			$gps_removed = Gps_Scrubber::scrub_file( $tmp, $meta['mime_type'] );
+		}
+
+		if ( $replace_id ) {
+			$replaced = Media_Replacer::replace( $replace_id, $tmp );
+			if ( is_wp_error( $replaced ) ) {
+				return $replaced;
+			}
+			return array_merge( $replaced, array( 'gps_removed' => $gps_removed ) );
 		}
 
 		require_once ABSPATH . 'wp-admin/includes/file.php';

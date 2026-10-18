@@ -155,6 +155,17 @@ final class Schemas {
 				'url'             => $nullable_string,
 				'set_as_featured' => array( 'type' => 'boolean' ),
 				'gps_removed'     => array( 'type' => 'boolean' ),
+				'replaced'        => array( 'type' => 'boolean' ),
+				'posts_updated'   => array(
+					'type'        => 'array',
+					'items'       => array( 'type' => 'integer' ),
+					'description' => 'After a replacement: posts whose content referenced old image URLs and was updated.',
+				),
+				'posts_skipped'   => array(
+					'type'        => 'array',
+					'items'       => array( 'type' => 'integer' ),
+					'description' => 'After a replacement: posts with old URLs that the user may not edit (left unchanged).',
+				),
 				'error'           => $nullable_string,
 			),
 		);
